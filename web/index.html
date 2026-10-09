@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stream Fault Lab</title>
+<link rel="stylesheet" href="/assets/style.css">
+<script defer src="/assets/hls.min.js"></script>
+<script defer src="/assets/app.js"></script>
+</head>
+<body>
+<header><div class="brand"><span class="mark">S</span>Stream Fault Lab <small>Local delivery testing</small></div><span id="connection" class="badge">Connecting…</span></header>
+<main>
+<div class="heading"><div><h1>Control the edge. Watch the response.</h1><p>One source, two playback URLs, real server logs.</p></div><a class="button" href="/api/trace">Export trace</a></div>
+<p id="notice" role="status" aria-live="polite" hidden></p>
+<div class="statuses">
+ <article><div class="title"><h2>Origin</h2><span id="origin-process" class="badge">Unknown</span></div><p id="origin-stream">Waiting for status</p><div id="origin-traffic" class="traffic">RX — · TX —</div></article>
+ <article><div class="title"><h2>Edge</h2><span id="edge-process" class="badge">Unknown</span></div><p id="edge-stream">Waiting for status</p><div id="edge-traffic" class="traffic">RX — · TX —</div></article>
+ <article><div class="title"><h2>Gateway</h2><span id="gateway-process" class="badge">Unknown</span></div><p id="gateway-state">Waiting for status</p><div class="traffic" id="run">—</div></article>
+</div>
+<div class="workspace">
+ <section class="panel"><span class="eyebrow">01 · Source</span><h2>Connect a stream</h2>
+  <label for="source">Input</label><select id="source"><option value="whip">OBS / WHIP</option><option value="demo">Generated test stream</option><option value="hls">Pull an HLS URL</option></select>
+  <div id="whip-input"><label for="whip-url">OBS WHIP server</label><div class="copy"><input id="whip-url" readonly aria-label="WHIP publishing URL"><button data-copy="whip-url" aria-label="Copy WHIP URL">Copy</button></div><p class="help">In OBS, select WHIP. Use H.264 video and Opus audio. Click Start Streaming.</p></div>
+  <div id="hls-input" hidden><label for="source-url">HLS playlist URL</label><input id="source-url" type="url" placeholder="https://example.test/live/index.m3u8"><p class="help">FFmpeg pulls the playlist and converts the stream for WHEP and HLS. Stop OBS before switching input.</p></div>
+  <p id="demo-input" class="help" hidden>A moving test pattern and an audio tone. No OBS setup is required.</p>
+  <button id="configure" class="primary wide" data-control>Use this source</button><p id="source-state" class="help">Source readiness is measured at the origin.</p>
+ </section>
+ <section class="panel"><span class="eyebrow">02 · Playback</span><h2>Open your player</h2>
+  <label for="whep-url">WHEP URL</label><div class="copy"><input id="whep-url" readonly><button data-copy="whep-url" aria-label="Copy WHEP URL">Copy</button></div>
+  <label for="hls-url">HLS URL</label><div class="copy"><input id="hls-url" readonly><button data-copy="hls-url" aria-label="Copy HLS URL">Copy</button></div>
+  <p class="help">WHEP signaling crosses the gateway. WebRTC media comes directly from the edge. All HLS requests cross the gateway.</p>
+  <p class="help">For a phone, set PUBLIC_HOST to this Mac’s LAN IP in .env and restart. The controller stays on localhost.</p>
+  <div class="inline"><span id="sessions" class="badge">Sessions: —</span><span id="bridge" class="help">HLS audio bridge: —</span></div>
+ </section>
+ <section class="panel"><span class="eyebrow">03 · Failure</span><h2>Inject a fault</h2>
+  <label for="preset">Failure</label><select id="preset"><option value="http503">HTTP 503 · unavailable</option><option value="http502">HTTP 502 · bad gateway</option><option value="delay">Slow HTTP response</option><option value="timeout">HTTP request timeout</option><option value="edge-down">Edge outage · stop process</option></select>
+  <label for="scope">Affected requests</label><select id="scope"><option value="whep-post">New WHEP connections (POST)</option><option value="hls-playlist">HLS playlists</option><option value="hls-media">HLS segments / initialization</option><option value="playback">WHEP POST + all HLS requests</option></select>
+  <div class="fields"><div><label for="duration">Duration (seconds)</label><input id="duration" type="number" min="1" max="600" value="15"></div><div id="delay-field" hidden><label for="delay">Delay (milliseconds)</label><input id="delay" type="number" min="100" max="30000" value="3000"></div></div>
+  <div class="scope-note" id="scope-note">Existing WebRTC media keeps flowing. Only new WHEP POST requests receive the error.</div>
+  <div class="actions"><button id="apply" class="primary" data-control>Apply fault</button><button id="restore" data-control>Restore healthy</button></div><p id="fault-state" class="help" aria-live="polite">No status yet</p>
+ </section>
+</div>
+<section class="panel preview">
+ <div class="title"><div><h2>Reference player</h2><p class="help">Check the pipeline here, then test your own player with the URLs above. This player does not reconnect automatically. HLS needs a few seconds after a source or edge restart to create its first segments.</p></div><div class="actions"><select id="preview-protocol" aria-label="Preview protocol"><option value="whep">WHEP</option><option value="hls">HLS</option></select><button id="play" data-control>Play</button><button id="stop">Stop</button></div></div>
+ <div class="preview-body"><video id="video" controls muted autoplay playsinline></video><div><span id="player-state" class="badge">Stopped</span><p id="frame-state" class="help">Rendered frames: —</p><p class="help">Server counters show server activity. Rendered frames and recovery need client evidence.</p></div></div>
+</section>
+<section class="panel logs">
+ <div class="title"><div><h2>Server logcat</h2><p class="help">Live process events, traffic counters, HTTP results, session aliases, and fault lifecycle.</p></div><div class="actions"><button id="pause">Pause view</button><button id="clear">Clear view</button></div></div>
+ <div class="filters"><div><label for="component">Component</label><select id="component"><option value="">All components</option><option>origin</option><option>edge</option><option>gateway</option><option>controller</option><option>source</option><option>hls-bridge</option></select></div><div><label for="level">Level</label><select id="level"><option value="">All levels</option><option>INFO</option><option>WARN</option><option>ERROR</option></select></div><div class="search"><label for="search">Find in trace</label><input id="search" type="search" placeholder="Request ID, session, status, event…"></div></div>
+ <div class="log-head"><span>UTC time</span><span>Component</span><span>Level</span><span>Event · open for details</span></div><ol id="records" aria-label="Server log events"></ol><p id="log-count" class="help">Waiting for events…</p>
+</section>
+<footer>No SDP, tokens, cookies, URL query values, or media payloads are saved in the trace. Local test streams only. <span id="stack">Python · aiohttp · MediaMTX · FFmpeg</span></footer>
+</main>
+</body>
+</html>
