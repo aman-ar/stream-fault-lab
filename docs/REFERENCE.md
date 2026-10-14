@@ -2,7 +2,7 @@
 
 A local lab for testing HTTP delivery, WebRTC media stalls, impaired delivery, and source/edge recovery. Runs directly on macOS. No Docker, Node.js, database, or frontend build is required.
 
-> New here? Read the [one-pager](../ONE_PAGER.md) for a quick overview.
+> New here? Read the [README](../README.md) for a quick overview.
 
 ## At a glance
 
@@ -257,11 +257,11 @@ For your player: start healthy playback, apply a fault, record failure/retry eve
 | Origin control / metrics | 127.0.0.1:9997 / 9998 |
 | Edge control / metrics | 127.0.0.1:10097 / 10098 |
 
-Native Apple Silicon was exercised during development; the bootstrap also pins an official Intel Mac binary. Intel and physical-device playback still need their own acceptance checks. See [VALIDATION.md](../VALIDATION.md) for the recorded checks.
+Native Apple Silicon was exercised during development; the bootstrap also pins an official Intel Mac binary. Intel and physical-device playback still need their own acceptance checks. See [TESTING.md](TESTING.md) for the recorded checks.
 
 ## Still requires representative infrastructure / devices
 
-Real Wi-Fi/mobile handover, NAT/address changes, VPN routing, trusted TURN/TLS, DNS/TLS failures, certificate rotation, multiple CDNs, token-refresh integration, multiple HLS variants/ABR, load, and long-running resource tests require appropriate device/network/source/server setups. HTTP status fixtures do not implement a real auth refresh service. This lab provides fault controls and reference evidence, not universal player certification. Use [PLAYER_ACCEPTANCE_CHECKLIST.md](../PLAYER_ACCEPTANCE_CHECKLIST.md) to track app/device runs and [PLAYER_RESILIENCE_PLAN.md](../PLAYER_RESILIENCE_PLAN.md) for standards and remaining areas.
+Real Wi-Fi/mobile handover, NAT/address changes, VPN routing, trusted TURN/TLS, DNS/TLS failures, certificate rotation, multiple CDNs, token-refresh integration, multiple HLS variants/ABR, load, and long-running resource tests require appropriate device/network/source/server setups. HTTP status fixtures do not implement a real auth refresh service. This lab provides fault controls and reference evidence, not universal player certification. Use [TESTING.md](TESTING.md) to track app/device runs and for standards and remaining areas.
 
 ## Dependency references
 

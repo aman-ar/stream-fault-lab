@@ -82,4 +82,4 @@ brew install python ffmpeg   # once
 - For a phone, set `PUBLIC_HOST` to your Mac's LAN IP.
 - The built-in reference player has no recovery logic. Judge recovery from your own player's logs.
 
-**More detail:** [Full reference](docs/REFERENCE.md) · [Validation](VALIDATION.md)
+**More detail:** [Full reference](docs/REFERENCE.md) · [Testing](docs/TESTING.md)
