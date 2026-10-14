@@ -64,12 +64,17 @@ The **Gateway** stands in for a CDN. Your player fetches from it exactly as it w
 
 This mocks CDN *behavior* on one local edge. It is not a real multi-CDN setup, so DNS, TLS, and failover between CDNs still need a real environment.
 
-## Quick example
+## Quick start
 
-1. `./start.sh`, choose **WHEP** and **Generated test stream**.
-2. Play `http://127.0.0.1:8080/live/whep` in your player.
-3. Apply **All transport traffic blackout** for 15 seconds.
-4. Watch what your player does, and time the recovery.
+```sh
+brew install python ffmpeg   # once
+./start.sh                   # then open http://localhost:9091
+```
+
+1. Choose **WHEP** or **HLS**, then **Generated test stream** → **Use this source**.
+2. Play in your player: WHEP `http://127.0.0.1:8080/live/whep` · HLS `http://127.0.0.1:8080/live/index.m3u8`
+3. Apply **All transport traffic blackout** for 15 seconds, watch what your player does, and time the recovery.
+4. **Restore healthy** clears any fault. **Ctrl+C** stops everything.
 
 ## Good to know
 
