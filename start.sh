@@ -3,10 +3,6 @@ set -euo pipefail
 cd "$(dirname "$0")"
 PYTHON="${LAB_PYTHON:-python3}"
 "$PYTHON" -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 or newer is required. Install: brew install python"'
-if ! command -v ffmpeg >/dev/null; then
-  echo 'FFmpeg is required. Install it once: brew install ffmpeg' >&2
-  exit 1
-fi
 if [ ! -x .venv/bin/python ]; then "$PYTHON" -m venv .venv; fi
 LAB_DEPENDENCY_DIGEST="$(shasum -a 256 requirements.txt)"
 LAB_INSTALLED_DIGEST=""

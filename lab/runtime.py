@@ -15,6 +15,19 @@ from .media_relay import MediaRelay
 from .turn import Turn
 
 
+def find_ffmpeg():
+    """Prefer a system FFmpeg; otherwise use the static build bundled with imageio-ffmpeg."""
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+
+        return get_ffmpeg_exe()
+    except (ImportError, RuntimeError):
+        return None
+
+
 ORIGIN_API = "http://127.0.0.1:9997"
 EDGE_API = "http://127.0.0.1:10097"
 ORIGIN_RTSP = "rtsp://127.0.0.1:18554"
@@ -360,9 +373,9 @@ class Runtime:
             self.source = kind
             self.source_url = url
             if kind != "whip":
-                ffmpeg = shutil.which("ffmpeg")
+                ffmpeg = find_ffmpeg()
                 if not ffmpeg:
-                    raise RuntimeError("FFmpeg is missing. Install: brew install ffmpeg")
+                    raise RuntimeError("FFmpeg is missing. Re-run ./start.sh to reinstall dependencies.")
                 command = [ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin"]
                 if kind == "demo":
                     command += [
@@ -475,7 +488,7 @@ class Runtime:
             or time.monotonic() < self.bridge_retry_at
         ):
             return
-        ffmpeg = shutil.which("ffmpeg")
+        ffmpeg = find_ffmpeg()
         if not ffmpeg:
             return
         self.bridge_retry_at = time.monotonic() + 5

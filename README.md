@@ -67,7 +67,7 @@ This mocks CDN *behavior* on one local edge. It is not a real multi-CDN setup, s
 ## Quick start
 
 ```sh
-brew install python ffmpeg   # once
+brew install python   # once. FFmpeg and MediaMTX are downloaded automatically.
 ./start.sh                   # then open http://localhost:9091
 ```
 

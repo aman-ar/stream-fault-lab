@@ -6,10 +6,10 @@ A local lab for testing HTTP delivery, WebRTC media stalls, impaired delivery, a
 
 ## Start on your Mac
 
-You need Python 3.11+ and FFmpeg. If needed, install them once with Homebrew:
+You need Python 3.11+. If needed, install it once with Homebrew:
 
 ```sh
-brew install python ffmpeg
+brew install python
 ```
 
 From a clone or an extracted copy of this project:
@@ -20,7 +20,7 @@ From a clone or an extracted copy of this project:
 
 Open **http://localhost:9091**. Choose **WHEP / WebRTC** or **HLS** under **Playback protocol**. Only that output runs; WHEP is the default and the choice is saved across restarts. Select **Generated test stream**, then **Use this source**. Wait until the origin and the selected edge path show `ready`. Click **Play** in the reference player, or copy the selected playback URL into your own player.
 
-The first start installs Python dependencies into `.venv/` and downloads MediaMTX **v1.21.2** into `.runtime/bin/`. The download is verified against pinned SHA-256 digests from the official release. Later starts reuse them. The Chrome HLS preview uses a vendored, integrity-verified hls.js **1.6.13** file, so the UI needs no internet connection. Your HLS source may need internet access.
+The first start installs Python dependencies, including a bundled FFmpeg (used only if no system `ffmpeg` is on your PATH), into `.venv/` and downloads MediaMTX **v1.21.2** into `.runtime/bin/`. The download is verified against pinned SHA-256 digests from the official release. Later starts reuse them. The Chrome HLS preview uses a vendored, integrity-verified hls.js **1.6.13** file, so the UI needs no internet connection. Your HLS source may need internet access.
 
 Press **Ctrl+C** in the terminal to stop the app and every media process it started. It does not stop unrelated processes or change macOS firewall rules. Start it again with the same command. If the controller port is occupied, use `./start.sh --ui-port 9092`. Other occupied ports are reported before media processes start.
 
