@@ -7,8 +7,8 @@ Three parts: what the lab itself has verified, what to run against your player, 
 Apple Silicon Mac, Python 3.14, MediaMTX 1.21.2, FFmpeg, headless Chrome. This covers the lab, not a production CDN or your player.
 
 ```sh
-.venv/bin/python -m unittest discover -s tests -v   # 40 tests, real local HTTP/socket fixtures
-.venv/bin/python scripts/smoke.py                   # lab running; real HLS delivery and fault checks
+./test.sh           # 40 unit tests, real local HTTP/socket fixtures. Needs only Python.
+./test.sh --smoke   # with the lab running (./start.sh): real HLS delivery and fault checks
 ```
 
 | Area | Verified |
