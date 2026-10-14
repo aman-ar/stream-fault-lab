@@ -1,109 +1,80 @@
-# Stream Fault Lab — One-Pager
+# Stream Fault Lab
 
-> **A local "bad network simulator" for live video.** Break the stream on purpose, on your own Mac, and watch how your player copes.
+**Break a live stream on purpose, on your Mac, and see how your player copes.**
+Supports WebRTC (WHEP) and HLS / LL-HLS. Start with `./start.sh`, then open http://localhost:9091.
 
----
-
-## The problem
-
-Live-video players look fine on a healthy network. Real users are on flaky Wi-Fi, VPNs, congested cellular, and behind CDNs that return errors. These failures are hard to reproduce on demand, so player recovery logic (retries, backoff, reconnects) often ships under-tested.
-
-## What the lab does
-
-Stream Fault Lab runs a miniature streaming stack locally and sits **between your player and the stream**. From a web UI you inject a fault, then observe whether your player stalls, retries, recovers, or gets stuck.
-
-- **Protocols:** WHEP / WebRTC and HLS (including LL-HLS)
-- **Setup:** one command, `./start.sh`, then open http://localhost:9091
-- **Requires:** macOS, Python 3.11+, FFmpeg. No Docker, database, or frontend build.
-
-## Who it's for
-
-| Role | How it helps |
-| --- | --- |
-| Player / app engineers | Reproduce failures deterministically and verify recovery logic |
-| QA | Repeatable fault scenarios instead of "turn off Wi-Fi and hope" |
-| Anyone curious | Built-in reference player and live server logs show what happens |
-
-## Data flow
+## How it works
 
 ```mermaid
 flowchart LR
-    S[Source<br/>OBS · HLS URL · test pattern] --> O[Origin]
-    O -- RTSP/TCP --> E[Edge<br/>WHEP or HLS]
-    E --> G{{"⚡ Gateway (HTTP)"}} --> P[Your player]
-    E --> R{{"⚡ Media relay (UDP/TCP)"}} --> P
-    UI[Web UI] -. inject faults .-> G
-    UI -. inject faults .-> R
+    SRC["🎥 <b>Source</b><br/>OBS · HLS URL · test pattern"]
+    ORI["🖥️ <b>Origin</b><br/>holds the live stream"]
+    EDG["📡 <b>Edge</b><br/>serves WHEP or HLS"]
+    CDN{{"⚡ <b>Mock CDN / network</b><br/>Gateway (HTTP)<br/>Media relay (UDP/TCP)"}}
+    PLY["📱 <b>Your player</b>"]
+    CTL["🎛️ <b>Fault controls</b><br/>web UI"]
+
+    SRC --> ORI --> EDG --> CDN --> PLY
+    CTL -. inject / restore .-> CDN
+
+    classDef healthy fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef fault fill:#fff3e0,stroke:#ef6c00,stroke-width:3px,color:#bf360c
+    classDef player fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
+    classDef ctl fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
+    class SRC,ORI,EDG healthy
+    class CDN fault
+    class PLY player
+    class CTL ctl
 ```
 
-Text version:
+Everything left of the orange box is healthy. The orange box sits between the edge and your player, like a CDN or the internet would. It is where faults are injected.
 
-**1. Source → Origin → Edge**
+## What you can test
 
-```text
-  ┌──────────────────────┐
-  │  Source (pick one)   │   OBS via WHIP  ·  HLS URL (via FFmpeg)  ·  Generated test pattern
-  └──────────┬───────────┘
-             ▼
-  ┌──────────────────────┐
-  │  Origin (MediaMTX)   │   receives and holds the live stream (H.264 + Opus)
-  └──────────┬───────────┘
-             │  RTSP / TCP
-             ▼
-  ┌──────────────────────┐
-  │  Edge (MediaMTX)     │   serves only the selected output: WHEP or HLS
-  └──────────┬───────────┘
-             ▼  (continues below)
-```
+| 🌐 Server and CDN behavior | 📶 Network conditions | 💥 Infrastructure |
+| --- | --- | --- |
+| HTTP errors: 401, 403, 404, 410, 429, 502, 503 | Full or UDP-only blackout | Origin goes down |
+| Retry-After and slow responses | Packet loss, jitter, latency | Edge restarts mid-stream |
+| Timeouts and redirects | Bandwidth caps | Repeated fail / recover cycles |
+| Stale playlists, truncated segments | Video or audio freezes silently | TURN and VPN paths |
 
-**2. Edge → Your player, through the fault points**
+## What it helps with
 
-```text
-  WHEP / WebRTC
-    signaling (HTTP) ───▶ ⚡ Gateway ─────────────────▶ Player
-    media (UDP/TCP)  ───▶ ⚡ Media relay ─────────────▶ Player
+- **Reproduce failures on demand** instead of "turn off Wi-Fi and hope".
+- **Check recovery:** does the player retry, back off, reconnect, and show video again?
+- **Compare runs** with the same fault, duration, and seed after each fix.
+- **See both sides:** the lab's server logs next to your player's own logs.
 
-  HLS
-    playlists + segments ─▶ ⚡ Gateway ───────────────▶ Player
+## How a CDN is mocked and verified
 
-  ⚡ = where faults are injected
-```
+The **Gateway** stands in for a CDN. Your player fetches from it exactly as it would from a CDN URL, and the lab changes what comes back.
 
-The **Gateway** (HTTP) and **Media relay** (UDP/TCP) are the two places the lab can tamper with traffic. The origin and edge are ordinary, healthy servers.
+| Real-world CDN problem | How the lab mocks it | What to verify in your player |
+| --- | --- | --- |
+| Rate limiting (429) | Return 429 with a chosen Retry-After | Player waits at least that long before retrying |
+| Origin errors (502/503) | Return the error for a set time | Retries use backoff and stop after a limit |
+| Expired token (401/403) | Return 401/403 | Player refreshes auth instead of looping |
+| Stream ended (404/410) | Return 404/410 | Player stops retrying and shows an end state |
+| Slow or hung edge | Delay or hold the response | Exiting the player cancels the pending request |
+| Stale cache | Serve an old playlist as if healthy | Player notices the frozen live edge |
+| Cut-off download | Send part of a segment, then close | Player retries and does not crash |
+| Redirect to another edge | One HTTP 307 on the setup POST | Player follows it and keeps the method |
 
-## What you can break
+**Verify** by applying a fault, watching your player, then checking the lab's log. Each gateway request shows its method, path, status, duration, and fault ID, so you can match the lab's action to what your player did. Press **Restore healthy** and measure how long the first recovered frame takes.
 
-| Area | Examples |
-| --- | --- |
-| HTTP errors | 401, 403, 404, 410, 429, 502, 503, Retry-After, delays, timeouts |
-| WebRTC setup | Unreachable ICE, DTLS mismatch, invalid SDP, redirects |
-| Network blackout | Drop all traffic or UDP only, in either direction |
-| Silent media stall | Stop video or audio while the connection looks healthy |
-| Poor quality | Packet loss, jitter, latency, reordering, bandwidth caps |
-| Infrastructure | Stop the origin or the edge mid-stream |
-| HLS | Stale playlists, truncated segments |
-| Repeat failures | Fail, recover, fail again, for up to 20 rounds |
+This mocks CDN *behavior* on one local edge. It is not a real multi-CDN setup, so DNS, TLS, and failover between CDNs still need a real environment.
 
-Press **Restore healthy** at any time to clear everything.
+## Quick example
 
-## A 60-second example
-
-1. Start the lab and choose **WHEP**, then **Generated test stream**.
-2. Point your player at `http://127.0.0.1:8080/live/whep`.
+1. `./start.sh`, choose **WHEP** and **Generated test stream**.
+2. Play `http://127.0.0.1:8080/live/whep` in your player.
 3. Apply **All transport traffic blackout** for 15 seconds.
-4. Watch what your player does, and how long it takes to show a frame again.
-
-## What you get back
-
-- **Live server logs:** requests, faults, relay byte counts, process state
-- **Reference player stats:** ICE state, stalls, loss, jitter
-- **Exportable traces:** JSONL, with SDP, cookies, and credentials left out
+4. Watch what your player does, and time the recovery.
 
 ## Good to know
 
-- Local, unauthenticated test tool. Don't expose it publicly.
-- Phones work: set `PUBLIC_HOST` to your Mac's LAN IP.
-- The built-in reference player has no recovery logic. It shows what the network did, not how your app should behave.
-- Server counters show what was sent, not what a viewer saw. Judge recovery from your player's own logs.
+- Local, unauthenticated tool. Don't expose it publicly.
+- For a phone, set `PUBLIC_HOST` to your Mac's LAN IP.
+- The built-in reference player has no recovery logic. Judge recovery from your own player's logs.
 
-**Learn more:** [README.md](README.md) · [VALIDATION.md](VALIDATION.md) · [PLAYER_TEST_RESULTS.md](PLAYER_TEST_RESULTS.md)
+**More detail:** [README](README.md) · [Validation](VALIDATION.md) · [Player results](PLAYER_TEST_RESULTS.md)

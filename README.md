@@ -8,19 +8,24 @@ A local lab for testing HTTP delivery, WebRTC media stalls, impaired delivery, a
 
 ```mermaid
 flowchart LR
-    subgraph Sources
-        OBS[OBS via WHIP]
-        HLSIN[HLS URL via FFmpeg]
-        GEN[Generated test pattern]
-    end
-    OBS & HLSIN & GEN --> ORIGIN[Origin<br/>MediaMTX]
-    ORIGIN -- RTSP/TCP --> EDGE[Edge<br/>MediaMTX]
-    EDGE -- HTTP --> GW{{"⚡ Gateway<br/>HTTP faults"}}
-    EDGE -- UDP/TCP media --> RELAY{{"⚡ Media relay<br/>network faults"}}
-    GW --> PLAYER[Your player]
-    RELAY --> PLAYER
-    UI[Web UI :9091] -. apply / restore faults .-> GW
-    UI -. apply / restore faults .-> RELAY
+    SRC["🎥 <b>Source</b><br/>OBS · HLS URL · test pattern"]
+    ORI["🖥️ <b>Origin</b><br/>holds the live stream"]
+    EDG["📡 <b>Edge</b><br/>serves WHEP or HLS"]
+    CDN{{"⚡ <b>Mock CDN / network</b><br/>Gateway (HTTP)<br/>Media relay (UDP/TCP)"}}
+    PLY["📱 <b>Your player</b>"]
+    CTL["🎛️ <b>Fault controls</b><br/>web UI"]
+
+    SRC --> ORI --> EDG --> CDN --> PLY
+    CTL -. inject / restore .-> CDN
+
+    classDef healthy fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef fault fill:#fff3e0,stroke:#ef6c00,stroke-width:3px,color:#bf360c
+    classDef player fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
+    classDef ctl fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
+    class SRC,ORI,EDG healthy
+    class CDN fault
+    class PLY player
+    class CTL ctl
 ```
 
 | Step | Command |
