@@ -2,14 +2,14 @@ import asyncio
 from collections import OrderedDict
 import re
 import time
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlencode
 import uuid
 
 from aiohttp import ClientError, ClientTimeout, web
+from multidict import CIMultiDict
 
 
-SCOPES = {"whep-post", "hls-playlist", "hls-media", "playback"}
-PRESETS = {"http503", "http502", "delay", "timeout", "edge-down"}
+from .faults import Faults, PRESETS, SCOPES, HTTP_CODES
 HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length"}
 
@@ -30,85 +30,33 @@ def request_kind(request):
     return "hls-media"
 
 
-class Faults:
-    def __init__(self, runtime, events):
-        self.runtime = runtime
-        self.events = events
-        self.active = None
-        self.timer = None
-        self.lock = asyncio.Lock()
-
-    def status(self):
-        return dict(self.active) if self.active else None
-
-    def match(self, kind):
-        fault = self.active
-        if not fault or fault["preset"] == "edge-down":
-            return None
-        if kind == fault["scope"] or (fault["scope"] == "playback" and kind != "whep-lifecycle"):
-            return dict(fault)
-        return None
-
-    async def apply(self, preset, scope, duration, delay_ms=3000):
-        if preset not in PRESETS or scope not in SCOPES:
-            raise ValueError("Unknown fault preset or scope.")
-        if not isinstance(duration, (int, float)) or isinstance(duration, bool) or not 1 <= duration <= 600:
-            raise ValueError("Fault duration must be 1–600 seconds.")
-        if not isinstance(delay_ms, (int, float)) or isinstance(delay_ms, bool) or not 100 <= delay_ms <= 30000:
-            raise ValueError("Response delay must be 100–30000 milliseconds.")
-        async with self.lock:
-            await self._restore()
-            fault = dict(id=uuid.uuid4().hex[:12], preset=preset, scope=scope,
-                         duration=duration, delay_ms=delay_ms, expires_at=time.time() + duration)
-            self.events.emit("controller", "fault_requested", f"Apply {preset}", **fault)
-            try:
-                if preset == "edge-down":
-                    await self.runtime.set_edge(False)
-                self.active = fault
-                self.events.emit("controller", "fault_applied", f"{preset} active", **fault)
-                self.timer = asyncio.create_task(self._expire(fault["id"], duration))
-                return self.status()
-            except Exception as exc:
-                self.events.emit("controller", "fault_failed", type(exc).__name__, level="ERROR", **fault)
-                raise
-
-    async def _expire(self, fault_id, duration):
-        await asyncio.sleep(duration)
-        async with self.lock:
-            if self.active and self.active["id"] == fault_id:
-                self.events.emit("controller", "fault_expired", "Fault duration elapsed", fault_id=fault_id)
-                try:
-                    await self._restore()
-                except Exception as exc:
-                    self.events.emit("controller", "restore_failed", str(exc), level="ERROR", fault_id=fault_id)
-
-    async def _restore(self):
-        if self.timer and self.timer is not asyncio.current_task():
-            self.timer.cancel()
-            await asyncio.gather(self.timer, return_exceptions=True)
-        self.timer = None
-        old = self.active
-        # Clear only after a required edge restart succeeds.
-        if not self.runtime.alive("edge"):
-            await self.runtime.set_edge(True)
-        self.active = None
-        if old:
-            self.events.emit("controller", "fault_restored", "Edge running; HTTP fault cleared", fault_id=old["id"])
-
-    async def restore(self):
-        async with self.lock:
-            self.events.emit("controller", "restore_requested", "Restore healthy requested")
-            try:
-                await self._restore()
-                self.events.emit("controller", "healthy_confirmed", "Edge running; HTTP fault cleared")
-            except Exception as exc:
-                self.events.emit("controller", "restore_failed", str(exc), level="ERROR")
-                raise
-
-    async def close(self):
-        if self.timer:
-            self.timer.cancel()
-            await asyncio.gather(self.timer, return_exceptions=True)
+def change_whep_answer(body, ice_ports=None, bad_fingerprint=False, media_host=None):
+    text = body.decode("utf-8")
+    candidates = fingerprints = 0
+    if ice_ports:
+        def candidate(match):
+            nonlocal candidates
+            candidates += 1
+            port = ice_ports[0] if match[2].lower() == "udp" else ice_ports[1]
+            prefix = match[3]
+            if media_host:
+                prefix = re.sub(r"\S+(\s+)$", lambda m: media_host + m[1], prefix)
+            return match[1] + match[2] + prefix + str(port) + match[5]
+        text = re.sub(r"^(a=candidate:\S+\s+\d+\s+)(udp|tcp)(\s+\d+\s+\S+\s+)(\d+)([^\r\n]*)",
+                      candidate, text, flags=re.MULTILINE | re.IGNORECASE)
+        if not candidates:
+            raise ValueError("ICE fault could not find UDP/TCP candidates in the edge answer.")
+    if bad_fingerprint:
+        def fingerprint(match):
+            nonlocal fingerprints
+            fingerprints += 1
+            value = match[2]
+            return match[1] + f"{int(value[:2], 16) ^ 1:02X}" + value[2:]
+        text = re.sub(r"^(a=fingerprint:\S+ )([A-Fa-f0-9]{2}(?::[A-Fa-f0-9]{2})+)(?=\r?$)",
+                      fingerprint, text, flags=re.MULTILINE)
+        if not fingerprints:
+            raise ValueError("DTLS fault could not find a certificate fingerprint in the edge answer.")
+    return text.encode(), candidates, fingerprints
 
 
 class Gateway:
@@ -120,6 +68,9 @@ class Gateway:
         self.whep_upstream = whep_upstream
         self.hls_upstream = hls_upstream
         self.resources = OrderedDict()
+        self.metadata = {}
+        self.stale_id = None
+        self.stale = OrderedDict()
 
     def rewrite_location(self, location, upstream_url):
         resolved = urljoin(upstream_url, location)
@@ -130,13 +81,15 @@ class Gateway:
         alias = uuid.uuid4().hex
         self.resources[alias] = resolved
         while len(self.resources) > 2000:
-            self.resources.popitem(last=False)
+            expired, _ = self.resources.popitem(last=False)
+            self.metadata.pop(expired, None)
         return "/live/whep/session/" + alias, alias
 
     def upstream_url(self, request, kind):
         if kind in ("whep-post", "whep-lifecycle"):
             if request.path == "/live/whep" and request.method in ("POST", "OPTIONS"):
-                return self.whep_upstream + "/live/whep" + ("?" + request.query_string if request.query_string else "")
+                query = urlencode([(k, v) for k, v in request.query.items() if k != "_lab_redirect"])
+                return self.whep_upstream + "/live/whep" + ("?" + query if query else "")
             match = re.fullmatch(r"/live/whep/session/([a-f0-9]{32})", request.path)
             if not match or match[1] not in self.resources:
                 raise web.HTTPNotFound(text="Unknown WHEP session resource.")
@@ -183,7 +136,12 @@ class Gateway:
 
     async def handle(self, request):
         if request.method == "OPTIONS":
-            return web.Response(status=204)
+            headers = CIMultiDict()
+            turn = getattr(self.faults.runtime, "turn", None)
+            if request.path == "/live/whep" and self.faults.runtime.protocol == "whep" and turn:
+                for link in turn.links():
+                    headers.add("Link", link)
+            return web.Response(status=204, headers=headers)
         kind = request_kind(request)
         request_id = uuid.uuid4().hex[:12]
         start = time.monotonic()
@@ -198,9 +156,15 @@ class Gateway:
         bytes_received = 0
         bytes_sent = 0
         fault = self.faults.match(kind)
+        if not fault or fault["id"] != self.stale_id:
+            self.stale.clear()
+            self.stale_id = fault["id"] if fault else None
         outcome = "forwarded"
         streaming_response = None
         try:
+            protocol = "whep" if kind.startswith("whep-") else "hls"
+            if protocol != self.faults.runtime.protocol:
+                raise web.HTTPConflict(text=f"{protocol.upper()} output is disabled. Select it in the controller.\n")
             body = await request.read()
             bytes_received = len(body)
             url = self.upstream_url(request, kind)
@@ -208,13 +172,24 @@ class Gateway:
                 preset = fault["preset"]
                 self.events.emit("gateway", "fault_matched", f"{preset} matched {kind}",
                                  request_id=request_id, fault_id=fault["id"])
-                if preset in ("http503", "http502"):
-                    response_status = 503 if preset == "http503" else 502
+                if preset in HTTP_CODES:
+                    response_status = HTTP_CODES[preset]
                     outcome = "injected"
                     text = f"Lab injected HTTP {response_status}\n"
                     bytes_sent = len(text.encode())
                     return web.Response(status=response_status, text=text,
-                                        headers={"Retry-After": "5"} if response_status == 503 else {})
+                                        headers=({"Retry-After": str(fault["options"].get("retry_after", 5))} if response_status in (429, 503) else
+                                                 {"WWW-Authenticate": 'Bearer realm="lab"'} if response_status == 401 else {}))
+                if preset == "redirect307" and request.query.get("_lab_redirect") != fault["id"]:
+                    response_status, outcome = 307, "injected_redirect"
+                    query = [(k, v) for k, v in request.query.items() if k != "_lab_redirect"]
+                    query.append(("_lab_redirect", fault["id"]))
+                    return web.Response(status=307, headers={"Location": request.path + "?" + urlencode(query)})
+                if preset == "stale-playlist" and path in self.stale:
+                    response_status, outcome = 200, "injected_stale_playlist"
+                    data, cached_headers = self.stale[path]
+                    bytes_sent = len(data)
+                    return web.Response(status=200, body=data, headers=cached_headers)
                 if preset == "timeout":
                     outcome = "injected_timeout"
                     # Intentionally send no response. Separate 60s guard bounds resources.
@@ -235,7 +210,7 @@ class Gateway:
                                             allow_redirects=False, timeout=ClientTimeout(total=30)) as upstream:
                 upstream_status = upstream.status
                 response_status = upstream.status
-                response_headers = forward_headers(upstream.headers)
+                response_headers = CIMultiDict(forward_headers(upstream.headers))
                 response_headers.pop("Content-Encoding", None)
                 response_headers["Cache-Control"] = "no-store"
                 if "Location" in upstream.headers:
@@ -244,18 +219,65 @@ class Gateway:
                     else:
                         location = self.rewrite_hls_location(upstream.headers["Location"], str(upstream.url))
                     response_headers["Location"] = location
-                if "Link" in response_headers:
-                    # MediaMTX has no configured STUN/TURN servers in this lab.
-                    # Avoid exposing an upstream absolute lifecycle URL through Link.
-                    response_headers.pop("Link")
+                response_headers.popall("Link", None)
+                turn = getattr(self.faults.runtime, "turn", None)
+                if kind == "whep-post" and turn:
+                    for link in turn.links():
+                        response_headers.add("Link", link)
                 if kind in ("whep-post", "whep-lifecycle", "hls-playlist"):
                     data = await upstream.read()
+                    if kind == "whep-post" and upstream.status == 201:
+                        relay = self.faults.runtime.media_relay
+                        data, candidates, _ = change_whep_answer(data, (relay.udp_port, relay.tcp_port),
+                                                                  media_host=getattr(self.faults.runtime, "media_host", None))
+                        if hasattr(relay, "register_answer"):
+                            self.metadata[alias] = relay.register_answer(data)
+                        self.events.emit("gateway", "media_route_configured", "WebRTC candidates routed through UDP/TCP relay",
+                                         request_id=request_id, candidates_changed=candidates)
+                    if kind == "whep-post" and upstream.status == 201 and fault and fault["preset"] in ("ice-unreachable", "dtls-fingerprint"):
+                        target = self.faults.runtime.ice_blackhole
+                        ports = (target.udp_port, target.tcp_port) if fault["preset"] == "ice-unreachable" else None
+                        data, candidates, fingerprints = change_whep_answer(data, ports, fault["preset"] == "dtls-fingerprint")
+                        outcome = "injected_ice_candidates" if ports else "injected_dtls_fingerprint"
+                        self.events.emit("gateway", "whep_answer_changed", "HTTP 201 retained; transport fault injected",
+                                         request_id=request_id, fault_id=fault["id"], preset=fault["preset"],
+                                         candidates_changed=candidates, fingerprints_changed=fingerprints)
+                    if kind == "whep-lifecycle" and request.method == "PATCH" and upstream.status == 200 and data:
+                        relay = self.faults.runtime.media_relay
+                        data, _, _ = change_whep_answer(data, (relay.udp_port, relay.tcp_port),
+                                                       media_host=getattr(self.faults.runtime, "media_host", None))
+                        if hasattr(relay, "register_answer"):
+                            self.metadata[alias] = relay.register_answer(data, self.metadata.get(alias))
+                    if kind == "whep-post" and upstream.status == 201 and fault and fault["preset"] == "bad-sdp":
+                        data = b"Lab invalid SDP answer\n"
+                        outcome = "injected_bad_sdp"
                     if kind == "hls-playlist" and upstream.status == 200:
                         data = self.rewrite_playlist(data)
+                        if fault and fault["preset"] == "stale-playlist":
+                            if len(data) <= 65536:
+                                self.stale[path] = (data, response_headers.copy())
+                                while len(self.stale) > 60:
+                                    self.stale.popitem(last=False)
+                            outcome = "injected_stale_playlist"
                     bytes_sent = len(data)
                     if request.method == "DELETE" and upstream.status in (200, 204, 404):
                         self.resources.pop(alias, None)
+                        self.metadata.pop(alias, None)
                     return web.Response(status=upstream.status, headers=response_headers, body=data)
+                if fault and fault["preset"] == "truncate-media" and upstream.status == 200 and request.method == "GET":
+                    data = await upstream.read()
+                    if len(data) > 1:
+                        kept = max(1, int(len(data) * fault["options"].get("cut_percent", 50) / 100))
+                        response_headers["Content-Length"] = str(len(data))
+                        response = web.StreamResponse(status=200, headers=response_headers)
+                        response.force_close()
+                        streaming_response = response
+                        await response.prepare(request)
+                        await response.write(data[:kept])
+                        bytes_sent, outcome = kept, "injected_truncated_media"
+                        if request.transport:
+                            request.transport.close()
+                        return response
                 response = web.StreamResponse(status=upstream.status, headers=response_headers)
                 streaming_response = response
                 await response.prepare(request)
@@ -306,7 +328,7 @@ async def cors(request, handler):
         response.headers.update({"Access-Control-Allow-Origin": "*",
                                  "Access-Control-Allow-Methods": "GET, HEAD, POST, PATCH, DELETE, OPTIONS",
                                  "Access-Control-Allow-Headers": "Content-Type, Authorization, If-Match, Range",
-                                 "Access-Control-Expose-Headers": "Location, ETag, Retry-After, Content-Range",
+                                 "Access-Control-Expose-Headers": "Location, ETag, Link, Retry-After, Content-Range",
                                  "Cache-Control": "no-store"})
     if exception:
         raise exception
@@ -316,7 +338,7 @@ async def cors(request, handler):
 async def prepare_cors(request, response):
     # Streamed segment responses are already prepared when middleware returns.
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Expose-Headers"] = "Location, ETag, Retry-After, Content-Range"
+    response.headers["Access-Control-Expose-Headers"] = "Location, ETag, Link, Retry-After, Content-Range"
     response.headers["Cache-Control"] = "no-store"
 
 

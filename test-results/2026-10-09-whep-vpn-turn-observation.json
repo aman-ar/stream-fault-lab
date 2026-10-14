@@ -1,0 +1,19 @@
+{
+  "scenario": "VPN instability with WHEP; operation succeeds with TURN configured",
+  "reported_on": "2026-10-09",
+  "user_report": "VPN caused unstable WHEP connection and worked with TURN credentials",
+  "observed": {
+    "vpn_enabled_without_reported_turn": "Unstable WHEP connection",
+    "with_turn_credentials_configured": "Worked, as reported by user",
+    "selected_candidate_pair": null,
+    "turn_transport": null,
+    "device": null,
+    "endpoint": null,
+    "errors": null,
+    "observation_duration": null
+  },
+  "status": "user_reported; controlled reproduction and selected relay verification pending",
+  "inference": "Consistent with TURN providing an alternative usable path; actual relay selection and UDP blocking are not established.",
+  "credentials_included": false,
+  "lab_run_id": null
+}

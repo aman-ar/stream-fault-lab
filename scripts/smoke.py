@@ -34,11 +34,13 @@ async def main(base):
             raise AssertionError("Timed out waiting for lab state")
 
         def ready(result):
-            return all(p["ready"] for p in result["components"]["edge"]["paths"]) and len(result["components"]["edge"]["paths"]) == 2
+            return all(p["ready"] for p in result["components"]["edge"]["paths"]) and len(result["components"]["edge"]["paths"]) == 1
 
+        original_protocol = (await status())["protocol"]
         await command("/api/restore", {})
         try:
             await command("/api/source", {"kind": "demo"})
+            await command("/api/protocol", {"protocol": "hls"})
             current = await wait_for(lambda state: ready(state) and state["components"]["origin"]["rx_bps"] is not None)
             assert current["components"]["origin"]["rx_bps"] is not None
             print("PASS: generated source, origin, edge, and HLS audio bridge ready")
@@ -104,6 +106,7 @@ async def main(base):
             print("PASS: edge auto-restores without restarting origin")
         finally:
             await command("/api/restore", {})
+            await command("/api/protocol", {"protocol": original_protocol})
 
 
 if __name__ == "__main__":

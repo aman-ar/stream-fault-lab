@@ -17,6 +17,7 @@ from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, web
 from .events import Events
 from .gateway import Faults, Gateway, gateway_app
 from .runtime import Runtime
+from .faults import FaultSequence
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,10 +41,10 @@ def validate_host(host):
 
 def check_ports(ui_port):
     ports = ((socket.SOCK_STREAM, p) for p in (ui_port, 8080, 18554, 18555, 8899, 18889, 18888,
-                                              9997, 9998, 10097, 10098, 8186))
+                                              9997, 9998, 10097, 10098, 8186, 18186))
     sockets = []
     try:
-        for kind, port in list(ports) + [(socket.SOCK_DGRAM, 8188), (socket.SOCK_DGRAM, 8189)]:
+        for kind, port in list(ports) + [(socket.SOCK_DGRAM, p) for p in (8188, 8189, 18189)]:
             sock = socket.socket(socket.AF_INET, kind)
             sockets.append(sock)
             try:
@@ -80,7 +81,9 @@ async def local_admin(request, handler):
         return web.json_response({"error": str(exc)}, status=503)
 
 
-def admin_app(runtime, faults, events, host):
+def admin_app(runtime, faults, events, host, sequence=None):
+    sequence = sequence or FaultSequence(faults, events)
+    operation = asyncio.Lock()
     app = web.Application(middlewares=[local_admin], client_max_size=16 * 1024)
 
     async def index(_):
@@ -88,31 +91,104 @@ def admin_app(runtime, faults, events, host):
 
     async def status(_):
         return web.json_response(dict(
-            run_id=events.run_id, public_host=host, source_kind=runtime.source,
+            run_id=events.run_id, public_host=host, source_kind=runtime.source, protocol=runtime.protocol,
             source_configured_at=runtime.source_configured_at,
             components=runtime.snapshot,
             source_process="running" if runtime.alive("source") else "stopped",
-            hls_bridge="running" if runtime.alive("hls-bridge") else "stopped",
-            fault=faults.status(),
+            hls_bridge=("running" if runtime.alive("hls-bridge") else "stopped") if runtime.protocol == "hls" else "disabled",
+            fault=faults.status(), sequence=sequence.status(),
+            hls_variant=getattr(runtime, "hls_variant", "fmp4"),
+            media_host=getattr(runtime, "media_host", host),
+            turn=runtime.turn.status() if hasattr(runtime, "turn") else None,
+            ice_discard=runtime.ice_blackhole.status(),
+            media_relay=runtime.media_relay.status(),
             urls=dict(whip="http://127.0.0.1:8899/live/whip",
-                      whep=f"http://{host}:8080/live/whep",
-                      hls=f"http://{host}:8080/live/index.m3u8")),
+                      whep=f"http://{host}:8080/live/whep" if runtime.protocol == "whep" else None,
+                      hls=f"http://{host}:8080/live/index.m3u8" if runtime.protocol == "hls" else None)),
             headers={"Cache-Control": "no-store"})
 
     async def source(request):
         data = await request.json()
-        await runtime.set_source(data["kind"], data.get("url", ""))
+        async with operation:
+            if sequence.status():
+                raise web.HTTPConflict(text="Stop the sequence before changing the source.")
+            await runtime.set_source(data["kind"], data.get("url", ""))
         return web.json_response({"source_kind": runtime.source})
+
+    async def protocol(request):
+        data = await request.json()
+        choice = data["protocol"]
+        if choice not in ("whep", "hls"):
+            raise ValueError("Choose whep or hls.")
+        async with operation:
+            if choice != runtime.protocol:
+                await sequence.stop()
+                await runtime.set_protocol(choice)
+        return web.json_response({"protocol": runtime.protocol})
 
     async def fault(request):
         data = await request.json()
-        result = await faults.apply(data["preset"], data.get("scope", "whep-post"),
-                                    data.get("duration", 15), data.get("delay_ms", 3000))
+        async with operation:
+            if sequence.status():
+                return web.json_response({"error": "Stop the sequence before applying another fault."}, status=409)
+            result = await faults.apply(data["preset"], data.get("scope", "whep-post"),
+                                        data.get("duration", 15), data.get("delay_ms", 3000), data.get("options"))
         return web.json_response({"fault": result})
 
     async def restore(_):
-        await faults.restore()
+        async with operation:
+            await sequence.stop()
         return web.json_response({"fault": None, "edge": "running"})
+
+    async def sequence_start(request):
+        data = await request.json()
+        async with operation:
+            result = await sequence.start(data.get("steps"))
+        return web.json_response({"sequence": result})
+
+    async def hls_profile(request):
+        data = await request.json()
+        if data.get("variant") not in ("fmp4", "lowLatency"):
+            raise ValueError("Choose fmp4 or lowLatency HLS.")
+        async with operation:
+            await sequence.stop()
+            await runtime.set_hls_variant(data["variant"])
+        return web.json_response({"variant": runtime.hls_variant})
+
+    async def turn_config(request):
+        data = await request.json()
+        async with operation:
+            if sequence.status() or faults.status():
+                return web.json_response({"error": "Restore healthy before changing TURN configuration."}, status=409)
+            await runtime.set_turn(data)
+        return web.json_response(runtime.turn.status())
+
+    async def ice_servers(_):
+        # Credentials are returned only to the loopback controller, never trace/status.
+        return web.json_response({"ice_servers": runtime.turn.servers}, headers={"Cache-Control": "no-store"})
+
+    async def player_event(request):
+        data = await request.json()
+        name = data.get("event")
+        if name not in ("ice_state", "connection_state", "dtls_state", "stall_started", "stall_ended", "stats", "hls_error"):
+            raise ValueError("Unknown reference-player event.")
+        allowed = {"ice_state": {"state"}, "connection_state": {"state"}, "dtls_state": {"state"},
+                   "stall_started": {"frames"}, "stall_ended": {"frames", "duration_ms"},
+                   "hls_error": {"details", "fatal"},
+                   "stats": {"frames", "packets_lost", "jitter_ms", "rtt_ms", "local_type", "remote_type", "protocol", "relay_protocol", "bytes_received", "audio_bytes_received", "concealed_samples", "turn_used"}}
+        values = {}
+        for key in allowed[name]:
+            value = data.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                import math
+                if math.isfinite(value) and 0 <= value <= 1e15:
+                    values[key] = value
+            elif isinstance(value, bool):
+                values[key] = value
+            elif isinstance(value, str) and len(value) <= 80 and re.fullmatch(r"[A-Za-z0-9 _.-]*", value):
+                values[key] = value
+        events.emit("reference-player", name, "Reference browser observation", **values)
+        return web.json_response({"recorded": True})
 
     async def history(_):
         return web.json_response(list(events.records), headers={"Cache-Control": "no-store"})
@@ -173,8 +249,14 @@ def admin_app(runtime, faults, events, host):
     app.router.add_get("/", index)
     app.router.add_get("/api/status", status)
     app.router.add_post("/api/source", source)
+    app.router.add_post("/api/protocol", protocol)
     app.router.add_post("/api/fault", fault)
     app.router.add_post("/api/restore", restore)
+    app.router.add_post("/api/sequence", sequence_start)
+    app.router.add_post("/api/hls-profile", hls_profile)
+    app.router.add_post("/api/turn", turn_config)
+    app.router.add_get("/api/ice-servers", ice_servers)
+    app.router.add_post("/api/player-event", player_event)
     app.router.add_get("/api/history", history)
     app.router.add_get("/api/events", stream)
     app.router.add_get("/api/trace", trace)
@@ -188,6 +270,7 @@ async def run(host, ui_port):
     session = ClientSession(timeout=ClientTimeout(total=30), auto_decompress=True, cookie_jar=DummyCookieJar())
     runtime = Runtime(ROOT, host, events, session)
     faults = Faults(runtime, events)
+    sequence = FaultSequence(faults, events)
     runners = []
     done = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -195,7 +278,7 @@ async def run(host, ui_port):
         loop.add_signal_handler(sig, done.set)
     try:
         await runtime.start()
-        for app, address, port in ((admin_app(runtime, faults, events, host), "127.0.0.1", ui_port),
+        for app, address, port in ((admin_app(runtime, faults, events, host, sequence), "127.0.0.1", ui_port),
                                    (gateway_app(Gateway(session, faults, events)), "0.0.0.0", 8080)):
             runner = web.AppRunner(app, access_log=None, handler_cancellation=True, shutdown_timeout=1)
             runners.append(runner)
@@ -205,6 +288,7 @@ async def run(host, ui_port):
         print(f"\nStream Fault Lab is running: http://localhost:{ui_port}\nPress Ctrl+C to stop all lab processes.\n", flush=True)
         await done.wait()
     finally:
+        await sequence.close()
         await faults.close()
         for runner in reversed(runners):
             await runner.cleanup()

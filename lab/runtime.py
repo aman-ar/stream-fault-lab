@@ -10,6 +10,10 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientTimeout
 
+from .ice_blackhole import IceBlackhole
+from .media_relay import MediaRelay
+from .turn import Turn
+
 
 ORIGIN_API = "http://127.0.0.1:9997"
 EDGE_API = "http://127.0.0.1:10097"
@@ -22,8 +26,19 @@ class Runtime:
     def __init__(self, root: Path, host, events, session):
         self.root = root
         self.host = host
+        self.media_host = host
+        self.hls_variant = "fmp4"
+        self.turn = Turn(root, events)
+        self.source_url = ""
+        self.origin_resume = None
         self.events = events
         self.session = session
+        self.ice_blackhole = IceBlackhole(events)
+        self.media_relay = MediaRelay(events)
+        choice = root / ".runtime" / "protocol"
+        self.protocol = choice.read_text().strip() if choice.exists() else "whep"
+        if self.protocol not in ("whep", "hls"):
+            raise ValueError("Saved playback protocol must be whep or hls.")
         self.processes = {}
         self.watchers = set()
         self.source = "whip"
@@ -101,8 +116,8 @@ class Runtime:
                     api=True, metrics=True, rtmp=False, srt=False, moq=False,
                     playback=False, rtsp=True, rtspTransports=["tcp"],
                     webrtc=True, webrtcIPsFromInterfaces=False,
-                    webrtcAdditionalHosts=[self.host if edge else "127.0.0.1"],
-                    webrtcICEServers2=[], webrtcAllowOrigins=["*"],
+                    webrtcAdditionalHosts=[self.media_host if edge else "127.0.0.1"],
+                    webrtcICEServers2=self.turn.mediamtx() if edge else [], webrtcAllowOrigins=["*"],
                     authInternalUsers=[
                         dict(user="any", pass_="", ips=[], permissions=[
                             dict(action="publish", path=""), dict(action="read", path="")]),
@@ -113,11 +128,13 @@ class Runtime:
         if edge:
             base.update(rtspAddress="127.0.0.1:18555", apiAddress="127.0.0.1:10097",
                         metricsAddress="127.0.0.1:10098", webrtcAddress="127.0.0.1:18889",
-                        webrtcLocalUDPAddress=":8189", webrtcLocalTCPAddress=":8186",
-                        hls=True, hlsAddress="127.0.0.1:18888", hlsVariant="fmp4",
+                        webrtcLocalUDPAddress=f"127.0.0.1:{self.media_relay.upstream_udp_port}",
+                        webrtcLocalTCPAddress=f"127.0.0.1:{self.media_relay.upstream_tcp_port}",
+                        webrtc=self.protocol == "whep",
+                        hls=self.protocol == "hls", hlsAddress="127.0.0.1:18888", hlsVariant=self.hls_variant, hlsPartDuration="200ms",
                         hlsAlwaysRemux=True, hlsSegmentDuration="2s", hlsSegmentCount=7,
-                        paths={"live": dict(source=ORIGIN_RTSP + "/live", rtspTransport="tcp"),
-                               "live-hls": dict(source=ORIGIN_RTSP + "/live-hls", rtspTransport="tcp")})
+                        paths={path: dict(source=ORIGIN_RTSP + "/" + path, rtspTransport="tcp")
+                               for path in (["live"] if self.protocol == "whep" else ["live-hls"])})
         else:
             base.update(rtspAddress="127.0.0.1:18554", apiAddress="127.0.0.1:9997",
                         metricsAddress="127.0.0.1:9998", webrtcAddress="127.0.0.1:8899",
@@ -126,7 +143,14 @@ class Runtime:
         return base
 
     async def start_server(self, name):
+        if name == "edge":
+            if self.protocol == "whep":
+                await self.media_relay.start()
+            else:
+                await self.media_relay.close()
         path = self.root / ".runtime" / f"{name}.json"
+        path.touch(mode=0o600, exist_ok=True)
+        path.chmod(0o600)
         path.write_text(json.dumps(self.config(name == "edge"), indent=2))
         self.baselines.pop(name, None)
         await self.spawn(name, [str(self.root / ".runtime/bin/mediamtx"), str(path)])
@@ -158,6 +182,79 @@ class Runtime:
             self.snapshot["edge"] = dict(process="stopped", available=False, paths=[],
                                          sessions=[], rx_bps=None, tx_bps=None)
 
+    async def set_origin(self, running):
+        if not running:
+            self.origin_resume = (self.source, self.source_url) if self.alive("source") else None
+            await self.stop("source")
+            await self.stop("hls-bridge")
+            await self.stop("origin")
+            self.snapshot["origin"] = dict(process="stopped", available=False, paths=[], sessions=[], rx_bps=None, tx_bps=None)
+        else:
+            await self.start_server("origin")
+            resume, self.origin_resume = self.origin_resume, None
+            if resume:
+                await self.set_source(*resume)
+            self.events.emit("controller", "origin_restored", "Origin running; external WHIP publisher may need to reconnect")
+
+    async def expire_edge_sessions(self):
+        items, page = [], 0
+        while True:
+            sessions = await self.fetch_json(EDGE_API + f"/v3/webrtc/sessions/list?page={page}&itemsPerPage=100")
+            items.extend(sessions.get("items", []))
+            page += 1
+            if page >= sessions.get("pageCount", 1):
+                break
+            if page >= 20:
+                raise RuntimeError("Too many sessions for this local lab control.")
+        count = 0
+        for item in items:
+            if item.get("state") != "read" or item.get("path") != "live":
+                continue
+            async with self.session.post(EDGE_API + "/v3/webrtc/sessions/kick/" + item["id"]) as response:
+                if response.status not in (200, 404):
+                    raise RuntimeError("Edge session could not be closed.")
+                count += response.status == 200
+        self.events.emit("edge", "sessions_expired", "Active read sessions closed; new WHEP POST remains available", count=count)
+
+    async def set_hls_variant(self, variant):
+        if variant not in ("fmp4", "lowLatency"):
+            raise ValueError("Choose fmp4 or lowLatency HLS.")
+        async with self.lock:
+            old = self.hls_variant
+            if old == variant:
+                return
+            self.hls_variant = variant
+            if self.protocol == "hls":
+                await self.stop("edge")
+                try:
+                    await self.start_server("edge")
+                except Exception:
+                    self.hls_variant = old
+                    await self.stop("edge")
+                    await self.start_server("edge")
+                    raise
+            self.events.emit("controller", "hls_profile_configured", "HLS profile configured", variant=variant)
+
+    async def set_turn(self, data):
+        # Changing ICE configuration terminates existing edge sessions.
+        async with self.lock:
+            old_host = self.media_host
+            old = self.turn.configuration()
+            try:
+                await self.turn.configure(data)
+                self.media_host = self.turn.media_host or self.host
+                if self.protocol == "whep":
+                    await self.stop("edge")
+                    await self.start_server("edge")
+            except Exception:
+                if self.turn.configuration() != old:
+                    await self.turn.configure(old)
+                self.media_host = old_host
+                if self.protocol == "whep" and not self.alive("edge"):
+                    await self.stop("edge")
+                    await self.start_server("edge")
+                raise
+
     async def set_source(self, kind, url=""):
         if kind not in ("whip", "demo", "hls"):
             raise ValueError("Choose whip, demo or hls.")
@@ -175,6 +272,7 @@ class Runtime:
             await self.stop("hls-bridge")
             self.bridge_retry_at = time.monotonic() + 1
             self.source = kind
+            self.source_url = url
             if kind != "whip":
                 ffmpeg = shutil.which("ffmpeg")
                 if not ffmpeg:
@@ -201,8 +299,33 @@ class Runtime:
                                            tx_bps=None, last_seen=None)
                 self.baselines.pop(name, None)
 
+    async def set_protocol(self, protocol):
+        if protocol not in ("whep", "hls"):
+            raise ValueError("Choose whep or hls.")
+        async with self.lock:
+            if protocol == self.protocol:
+                return
+            previous = self.protocol
+            await self.stop("edge")
+            await self.stop("hls-bridge")
+            self.protocol = protocol
+            self.source_generation += 1
+            try:
+                await self.start_server("edge")
+                (self.root / ".runtime" / "protocol").write_text(protocol + "\n")
+            except Exception:
+                await self.stop("edge")
+                self.protocol = previous
+                await self.start_server("edge")
+                raise
+            self.edge_wanted = True
+            self.snapshot["edge"] = dict(process="running", available=False, paths=[],
+                                         sessions=[], rx_bps=None, tx_bps=None, last_seen=None)
+            self.events.emit("controller", "protocol_configured", f"Playback: {protocol.upper()}",
+                             protocol=protocol)
+
     async def _bridge(self):
-        if self.alive("hls-bridge") or time.monotonic() < self.bridge_retry_at:
+        if self.protocol != "hls" or self.alive("hls-bridge") or time.monotonic() < self.bridge_retry_at:
             return
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
@@ -228,7 +351,8 @@ class Runtime:
             return result
         try:
             paths = await self.fetch_json(api + "/v3/paths/list")
-            sessions = await self.fetch_json(api + "/v3/webrtcsessions/list")
+            sessions = (await self.fetch_json(api + "/v3/webrtc/sessions/list")
+                        if name == "origin" or self.protocol == "whep" else {"items": []})
             result.update(available=True, last_seen=time.time(),
                           paths=[dict(name=p["name"], ready=p.get("ready", False),
                                       codecs=p.get("tracks", []), readers=len(p.get("readers") or []))
@@ -288,10 +412,13 @@ class Runtime:
                                          hls_http_bps=result["hls_http_bps"])
                 async with self.lock:
                     ready = any(p["name"] == "live" and p["ready"] for p in self.snapshot["origin"]["paths"])
-                    if ready:
+                    if ready and self.protocol == "hls":
                         await self._bridge()
                     elif self.alive("hls-bridge"):
                         await self.stop("hls-bridge")
+                if self.protocol == "whep":
+                    self.events.emit("media-relay", "traffic_sample", "Forwarded and discarded traffic totals",
+                                     **self.media_relay.status())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -303,6 +430,9 @@ class Runtime:
         if self.poll_task:
             self.poll_task.cancel()
             await asyncio.gather(self.poll_task, return_exceptions=True)
+        await self.turn.close()
+        await self.ice_blackhole.close()
+        await self.media_relay.close()
         for name in ("source", "hls-bridge", "edge", "origin"):
             await self.stop(name)
         await asyncio.gather(*self.watchers, return_exceptions=True)
