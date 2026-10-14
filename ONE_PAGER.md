@@ -77,4 +77,4 @@ This mocks CDN *behavior* on one local edge. It is not a real multi-CDN setup, s
 - For a phone, set `PUBLIC_HOST` to your Mac's LAN IP.
 - The built-in reference player has no recovery logic. Judge recovery from your own player's logs.
 
-**More detail:** [README](README.md) · [Validation](VALIDATION.md) · [Player results](PLAYER_TEST_RESULTS.md)
+**More detail:** [Full reference](docs/REFERENCE.md) · [Validation](VALIDATION.md) · [Player results](PLAYER_TEST_RESULTS.md)

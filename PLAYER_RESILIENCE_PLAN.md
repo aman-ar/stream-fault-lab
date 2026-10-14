@@ -63,7 +63,7 @@ The user has observed unstable WHEP under a VPN and successful operation after c
 
 ## Implemented expansion — 2026-10-09
 
-The earlier table is retained as the pre-expansion snapshot. New lab controls now cover selective RTP/audio/video stalls, UDP blackout, bounded packet impairment, additional HTTP codes and Retry-After, 307 POST redirect, invalid SDP, lifecycle-only HTTP faults, active-session closure, origin-only outage, stale successful HLS playlists, truncated downloads, an LL-HLS profile, and finite outage sequences. Native/external TURN configuration and relay-only browser checks add evidence for the VPN reproduction. See README.md for exact fixture behavior and VALIDATION.md for implementation verification.
+The earlier table is retained as the pre-expansion snapshot. New lab controls now cover selective RTP/audio/video stalls, UDP blackout, bounded packet impairment, additional HTTP codes and Retry-After, 307 POST redirect, invalid SDP, lifecycle-only HTTP faults, active-session closure, origin-only outage, stale successful HLS playlists, truncated downloads, an LL-HLS profile, and finite outage sequences. Native/external TURN configuration and relay-only browser checks add evidence for the VPN reproduction. See docs/REFERENCE.md for exact fixture behavior and VALIDATION.md for implementation verification.
 
 | Area | Available lab check | Remaining acceptance work |
 | --- | --- | --- |
