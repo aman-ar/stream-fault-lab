@@ -46,9 +46,17 @@ class Runtime:
         self.source_configured_at = 0
         self.edge_wanted = True
         self.lock = asyncio.Lock()
-        self.snapshot = {name: {"process": "starting", "available": False, "paths": [],
-                                "sessions": [], "rx_bps": None, "tx_bps": None}
-                         for name in ("origin", "edge")}
+        self.snapshot = {
+            name: {
+                "process": "starting",
+                "available": False,
+                "paths": [],
+                "sessions": [],
+                "rx_bps": None,
+                "tx_bps": None,
+            }
+            for name in ("origin", "edge")
+        }
         self.baselines = {}
         self.last_states = {}
         self.bridge_retry_at = 0
@@ -63,9 +71,13 @@ class Runtime:
         if self.alive(name):
             return
         proc = await asyncio.create_subprocess_exec(
-            *command, cwd=self.root, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, start_new_session=True,
-            limit=256 * 1024)
+            *command,
+            cwd=self.root,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+            limit=256 * 1024,
+        )
         self.processes[name] = proc
         self.events.emit(name, "process_started", "Process started", pid=proc.pid)
         task = asyncio.create_task(self._watch(name, proc))
@@ -81,14 +93,21 @@ class Runtime:
                 data = json.loads(text)
                 message = data.get("message", text)
                 level = str(data.get("level", "INFO")).upper()
-                level = {"INF": "INFO", "WAR": "WARN", "ERR": "ERROR", "DEB": "DEBUG"}.get(level, level)
+                level = {"INF": "INFO", "WAR": "WARN", "ERR": "ERROR", "DEB": "DEBUG"}.get(
+                    level, level
+                )
             except (ValueError, AttributeError):
                 message = text
                 level = "WARN" if "error" in text.lower() else "INFO"
             self.events.emit(name, "server_log", message, level=level)
         code = await proc.wait()
-        self.events.emit(name, "process_exited", "Process stopped", exit_code=code,
-                         level="INFO" if code in (0, -signal.SIGTERM) else "WARN")
+        self.events.emit(
+            name,
+            "process_exited",
+            "Process stopped",
+            exit_code=code,
+            level="INFO" if code in (0, -signal.SIGTERM) else "WARN",
+        )
 
     async def stop(self, name):
         proc = self.processes.get(name)
@@ -112,34 +131,72 @@ class Runtime:
 
     def config(self, edge):
         # JSON is a YAML subset, avoids a YAML dependency and quoting interpolation.
-        base = dict(logLevel="info", logStructured=True, logDestinations=["stdout"],
-                    api=True, metrics=True, rtmp=False, srt=False, moq=False,
-                    playback=False, rtsp=True, rtspTransports=["tcp"],
-                    webrtc=True, webrtcIPsFromInterfaces=False,
-                    webrtcAdditionalHosts=[self.media_host if edge else "127.0.0.1"],
-                    webrtcICEServers2=self.turn.mediamtx() if edge else [], webrtcAllowOrigins=["*"],
-                    authInternalUsers=[
-                        dict(user="any", pass_="", ips=[], permissions=[
-                            dict(action="publish", path=""), dict(action="read", path="")]),
-                        dict(user="any", pass_="", ips=["127.0.0.1", "::1"], permissions=[
-                            dict(action="api"), dict(action="metrics")])])
+        base = dict(
+            logLevel="info",
+            logStructured=True,
+            logDestinations=["stdout"],
+            api=True,
+            metrics=True,
+            rtmp=False,
+            srt=False,
+            moq=False,
+            playback=False,
+            rtsp=True,
+            rtspTransports=["tcp"],
+            webrtc=True,
+            webrtcIPsFromInterfaces=False,
+            webrtcAdditionalHosts=[self.media_host if edge else "127.0.0.1"],
+            webrtcICEServers2=self.turn.mediamtx() if edge else [],
+            webrtcAllowOrigins=["*"],
+            authInternalUsers=[
+                dict(
+                    user="any",
+                    pass_="",
+                    ips=[],
+                    permissions=[dict(action="publish", path=""), dict(action="read", path="")],
+                ),
+                dict(
+                    user="any",
+                    pass_="",
+                    ips=["127.0.0.1", "::1"],
+                    permissions=[dict(action="api"), dict(action="metrics")],
+                ),
+            ],
+        )
         for user in base["authInternalUsers"]:
             user["pass"] = user.pop("pass_")
         if edge:
-            base.update(rtspAddress="127.0.0.1:18555", apiAddress="127.0.0.1:10097",
-                        metricsAddress="127.0.0.1:10098", webrtcAddress="127.0.0.1:18889",
-                        webrtcLocalUDPAddress=f"127.0.0.1:{self.media_relay.upstream_udp_port}",
-                        webrtcLocalTCPAddress=f"127.0.0.1:{self.media_relay.upstream_tcp_port}",
-                        webrtc=self.protocol == "whep",
-                        hls=self.protocol == "hls", hlsAddress="127.0.0.1:18888", hlsVariant=self.hls_variant, hlsPartDuration="200ms",
-                        hlsAlwaysRemux=True, hlsSegmentDuration="2s", hlsSegmentCount=7,
-                        paths={path: dict(source=ORIGIN_RTSP + "/" + path, rtspTransport="tcp")
-                               for path in (["live"] if self.protocol == "whep" else ["live-hls"])})
+            base.update(
+                rtspAddress="127.0.0.1:18555",
+                apiAddress="127.0.0.1:10097",
+                metricsAddress="127.0.0.1:10098",
+                webrtcAddress="127.0.0.1:18889",
+                webrtcLocalUDPAddress=f"127.0.0.1:{self.media_relay.upstream_udp_port}",
+                webrtcLocalTCPAddress=f"127.0.0.1:{self.media_relay.upstream_tcp_port}",
+                webrtc=self.protocol == "whep",
+                hls=self.protocol == "hls",
+                hlsAddress="127.0.0.1:18888",
+                hlsVariant=self.hls_variant,
+                hlsPartDuration="200ms",
+                hlsAlwaysRemux=True,
+                hlsSegmentDuration="2s",
+                hlsSegmentCount=7,
+                paths={
+                    path: dict(source=ORIGIN_RTSP + "/" + path, rtspTransport="tcp")
+                    for path in (["live"] if self.protocol == "whep" else ["live-hls"])
+                },
+            )
         else:
-            base.update(rtspAddress="127.0.0.1:18554", apiAddress="127.0.0.1:9997",
-                        metricsAddress="127.0.0.1:9998", webrtcAddress="127.0.0.1:8899",
-                        webrtcLocalUDPAddress="127.0.0.1:8188", webrtcLocalTCPAddress="",
-                        hls=False, paths={"live": {}, "live-hls": {}})
+            base.update(
+                rtspAddress="127.0.0.1:18554",
+                apiAddress="127.0.0.1:9997",
+                metricsAddress="127.0.0.1:9998",
+                webrtcAddress="127.0.0.1:8899",
+                webrtcLocalUDPAddress="127.0.0.1:8188",
+                webrtcLocalTCPAddress="",
+                hls=False,
+                paths={"live": {}, "live-hls": {}},
+            )
         return base
 
     async def start_server(self, name):
@@ -159,7 +216,9 @@ class Runtime:
             if not self.alive(name):
                 raise RuntimeError(f"{name} exited. Check server logs.")
             try:
-                async with self.session.get(url + "/v3/paths/list", timeout=ClientTimeout(total=0.5)) as res:
+                async with self.session.get(
+                    url + "/v3/paths/list", timeout=ClientTimeout(total=0.5)
+                ) as res:
                     if res.status == 200:
                         return
             except (ClientError, OSError, asyncio.TimeoutError):
@@ -179,8 +238,9 @@ class Runtime:
         else:
             await self.stop("edge")
             self.baselines.pop("edge", None)
-            self.snapshot["edge"] = dict(process="stopped", available=False, paths=[],
-                                         sessions=[], rx_bps=None, tx_bps=None)
+            self.snapshot["edge"] = dict(
+                process="stopped", available=False, paths=[], sessions=[], rx_bps=None, tx_bps=None
+            )
 
     async def set_origin(self, running):
         if not running:
@@ -188,18 +248,26 @@ class Runtime:
             await self.stop("source")
             await self.stop("hls-bridge")
             await self.stop("origin")
-            self.snapshot["origin"] = dict(process="stopped", available=False, paths=[], sessions=[], rx_bps=None, tx_bps=None)
+            self.snapshot["origin"] = dict(
+                process="stopped", available=False, paths=[], sessions=[], rx_bps=None, tx_bps=None
+            )
         else:
             await self.start_server("origin")
             resume, self.origin_resume = self.origin_resume, None
             if resume:
                 await self.set_source(*resume)
-            self.events.emit("controller", "origin_restored", "Origin running; external WHIP publisher may need to reconnect")
+            self.events.emit(
+                "controller",
+                "origin_restored",
+                "Origin running; external WHIP publisher may need to reconnect",
+            )
 
     async def expire_edge_sessions(self):
         items, page = [], 0
         while True:
-            sessions = await self.fetch_json(EDGE_API + f"/v3/webrtc/sessions/list?page={page}&itemsPerPage=100")
+            sessions = await self.fetch_json(
+                EDGE_API + f"/v3/webrtc/sessions/list?page={page}&itemsPerPage=100"
+            )
             items.extend(sessions.get("items", []))
             page += 1
             if page >= sessions.get("pageCount", 1):
@@ -210,11 +278,18 @@ class Runtime:
         for item in items:
             if item.get("state") != "read" or item.get("path") != "live":
                 continue
-            async with self.session.post(EDGE_API + "/v3/webrtc/sessions/kick/" + item["id"]) as response:
+            async with self.session.post(
+                EDGE_API + "/v3/webrtc/sessions/kick/" + item["id"]
+            ) as response:
                 if response.status not in (200, 404):
                     raise RuntimeError("Edge session could not be closed.")
                 count += response.status == 200
-        self.events.emit("edge", "sessions_expired", "Active read sessions closed; new WHEP POST remains available", count=count)
+        self.events.emit(
+            "edge",
+            "sessions_expired",
+            "Active read sessions closed; new WHEP POST remains available",
+            count=count,
+        )
 
     async def set_hls_variant(self, variant):
         if variant not in ("fmp4", "lowLatency"):
@@ -233,7 +308,9 @@ class Runtime:
                     await self.stop("edge")
                     await self.start_server("edge")
                     raise
-            self.events.emit("controller", "hls_profile_configured", "HLS profile configured", variant=variant)
+            self.events.emit(
+                "controller", "hls_profile_configured", "HLS profile configured", variant=variant
+            )
 
     async def set_turn(self, data):
         # Changing ICE configuration terminates existing edge sessions.
@@ -260,13 +337,22 @@ class Runtime:
             raise ValueError("Choose whip, demo or hls.")
         if kind == "hls":
             parsed = urlsplit(url)
-            if parsed.scheme not in ("http", "https") or not parsed.hostname or len(url) > 4000 or any(ord(c) < 32 for c in url):
+            if (
+                parsed.scheme not in ("http", "https")
+                or not parsed.hostname
+                or len(url) > 4000
+                or any(ord(c) < 32 for c in url)
+            ):
                 raise ValueError("Enter a complete http(s) HLS playlist URL.")
         async with self.lock:
             # The origin permits one publisher. OBS must stop before switching input.
-            ready = any(p["name"] == "live" and p["ready"] for p in self.snapshot["origin"]["paths"])
+            ready = any(
+                p["name"] == "live" and p["ready"] for p in self.snapshot["origin"]["paths"]
+            )
             if ready and not self.alive("source") and kind != "whip":
-                raise ValueError("Stop the current OBS/external publisher before changing the source.")
+                raise ValueError(
+                    "Stop the current OBS/external publisher before changing the source."
+                )
             self.source_generation += 1
             await self.stop("source")
             await self.stop("hls-bridge")
@@ -279,24 +365,71 @@ class Runtime:
                     raise RuntimeError("FFmpeg is missing. Install: brew install ffmpeg")
                 command = [ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin"]
                 if kind == "demo":
-                    command += ["-re", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
-                                "-re", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-                                "-map", "0:v:0", "-map", "1:a:0"]
+                    command += [
+                        "-re",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "testsrc2=size=640x360:rate=30",
+                        "-re",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "sine=frequency=440:sample_rate=48000",
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "1:a:0",
+                    ]
                 else:
                     command += ["-re", "-i", url, "-map", "0:v:0", "-map", "0:a:0?"]
-                command += ["-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
-                            "-preset", "ultrafast", "-tune", "zerolatency", "-g", "60",
-                            "-keyint_min", "60", "-sc_threshold", "0", "-c:a", "libopus",
-                            "-b:a", "96k", "-ar", "48000", "-ac", "2",
-                            "-rtsp_transport", "tcp", "-f", "rtsp", ORIGIN_RTSP + "/live"]
+                command += [
+                    "-c:v",
+                    "libx264",
+                    "-profile:v",
+                    "baseline",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-preset",
+                    "ultrafast",
+                    "-tune",
+                    "zerolatency",
+                    "-g",
+                    "60",
+                    "-keyint_min",
+                    "60",
+                    "-sc_threshold",
+                    "0",
+                    "-c:a",
+                    "libopus",
+                    "-b:a",
+                    "96k",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-rtsp_transport",
+                    "tcp",
+                    "-f",
+                    "rtsp",
+                    ORIGIN_RTSP + "/live",
+                ]
                 await self.spawn("source", command)
-            self.events.emit("controller", "source_configured", f"Source mode: {kind}", source_kind=kind)
+            self.events.emit(
+                "controller", "source_configured", f"Source mode: {kind}", source_kind=kind
+            )
             self.source_configured_at = time.time()
             # Discard status measured before source replacement; do not display old readiness.
             for name in ("origin", "edge"):
-                self.snapshot[name] = dict(process="running" if self.alive(name) else "stopped",
-                                           available=False, paths=[], sessions=[], rx_bps=None,
-                                           tx_bps=None, last_seen=None)
+                self.snapshot[name] = dict(
+                    process="running" if self.alive(name) else "stopped",
+                    available=False,
+                    paths=[],
+                    sessions=[],
+                    rx_bps=None,
+                    tx_bps=None,
+                    last_seen=None,
+                )
                 self.baselines.pop(name, None)
 
     async def set_protocol(self, protocol):
@@ -319,23 +452,66 @@ class Runtime:
                 await self.start_server("edge")
                 raise
             self.edge_wanted = True
-            self.snapshot["edge"] = dict(process="running", available=False, paths=[],
-                                         sessions=[], rx_bps=None, tx_bps=None, last_seen=None)
-            self.events.emit("controller", "protocol_configured", f"Playback: {protocol.upper()}",
-                             protocol=protocol)
+            self.snapshot["edge"] = dict(
+                process="running",
+                available=False,
+                paths=[],
+                sessions=[],
+                rx_bps=None,
+                tx_bps=None,
+                last_seen=None,
+            )
+            self.events.emit(
+                "controller",
+                "protocol_configured",
+                f"Playback: {protocol.upper()}",
+                protocol=protocol,
+            )
 
     async def _bridge(self):
-        if self.protocol != "hls" or self.alive("hls-bridge") or time.monotonic() < self.bridge_retry_at:
+        if (
+            self.protocol != "hls"
+            or self.alive("hls-bridge")
+            or time.monotonic() < self.bridge_retry_at
+        ):
             return
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             return
         self.bridge_retry_at = time.monotonic() + 5
-        await self.spawn("hls-bridge", [ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin",
-                         "-rtsp_transport", "tcp", "-i", ORIGIN_RTSP + "/live",
-                         "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac",
-                         "-b:a", "128k", "-ar", "48000", "-ac", "2",
-                         "-rtsp_transport", "tcp", "-f", "rtsp", ORIGIN_RTSP + "/live-hls"])
+        await self.spawn(
+            "hls-bridge",
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-nostdin",
+                "-rtsp_transport",
+                "tcp",
+                "-i",
+                ORIGIN_RTSP + "/live",
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0?",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-rtsp_transport",
+                "tcp",
+                "-f",
+                "rtsp",
+                ORIGIN_RTSP + "/live-hls",
+            ],
+        )
 
     async def fetch_json(self, url):
         async with self.session.get(url, timeout=ClientTimeout(total=1.5)) as res:
@@ -343,35 +519,72 @@ class Runtime:
             return await res.json()
 
     async def inspect(self, name, api, metrics_port):
-        result = dict(process="running" if self.alive(name) else "stopped", available=False,
-                      paths=[], sessions=[], rx_bps=None, tx_bps=None,
-                      hls_http_bps=None,
-                      last_seen=None, pid=self.processes[name].pid if self.alive(name) else None)
+        result = dict(
+            process="running" if self.alive(name) else "stopped",
+            available=False,
+            paths=[],
+            sessions=[],
+            rx_bps=None,
+            tx_bps=None,
+            hls_http_bps=None,
+            last_seen=None,
+            pid=self.processes[name].pid if self.alive(name) else None,
+        )
         if not self.alive(name):
             return result
         try:
             paths = await self.fetch_json(api + "/v3/paths/list")
-            sessions = (await self.fetch_json(api + "/v3/webrtc/sessions/list")
-                        if name == "origin" or self.protocol == "whep" else {"items": []})
-            result.update(available=True, last_seen=time.time(),
-                          paths=[dict(name=p["name"], ready=p.get("ready", False),
-                                      codecs=p.get("tracks", []), readers=len(p.get("readers") or []))
-                                 for p in paths.get("items", [])],
-                          sessions=[{k: s.get(k) for k in ("id", "path", "state", "peerConnectionEstablished",
-                                                         "bytesReceived", "bytesSent", "inboundBytes", "outboundBytes")
-                                     if k in s} for s in sessions.get("items", [])])
-            async with self.session.get(f"http://127.0.0.1:{metrics_port}/metrics", timeout=ClientTimeout(total=1.5)) as res:
+            sessions = (
+                await self.fetch_json(api + "/v3/webrtc/sessions/list")
+                if name == "origin" or self.protocol == "whep"
+                else {"items": []}
+            )
+            result.update(
+                available=True,
+                last_seen=time.time(),
+                paths=[
+                    dict(
+                        name=p["name"],
+                        ready=p.get("ready", False),
+                        codecs=p.get("tracks", []),
+                        readers=len(p.get("readers") or []),
+                    )
+                    for p in paths.get("items", [])
+                ],
+                sessions=[
+                    {
+                        k: s.get(k)
+                        for k in (
+                            "id",
+                            "path",
+                            "state",
+                            "peerConnectionEstablished",
+                            "bytesReceived",
+                            "bytesSent",
+                            "inboundBytes",
+                            "outboundBytes",
+                        )
+                        if k in s
+                    }
+                    for s in sessions.get("items", [])
+                ],
+            )
+            async with self.session.get(
+                f"http://127.0.0.1:{metrics_port}/metrics", timeout=ClientTimeout(total=1.5)
+            ) as res:
                 res.raise_for_status()
                 text = await res.text()
             totals = {"rx": 0.0, "tx": 0.0, "hls_http": 0.0}
             found = set()
             for line in text.splitlines():
-                match = re.match(r'paths_(inbound|outbound)_bytes\{[^}]*\}\s+([\d.eE+\-]+)', line)
+                match = re.match(r"paths_(inbound|outbound)_bytes\{[^}]*\}\s+([\d.eE+\-]+)", line)
                 if match:
                     direction = "rx" if match[1] == "inbound" else "tx"
                     totals[direction] += float(match[2])
                     found.add(direction)
-                hls_match = re.match(r'hls_muxers_outbound_bytes\{name="live-hls"\}\s+([\d.eE+\-]+)', line)
+                hls_match = re.match(
+                    r'hls_muxers_outbound_bytes\{name="live-hls"\}\s+([\d.eE+\-]+)', line
+                )
                 if hls_match:
                     totals["hls_http"] = float(hls_match[1])
                     found.add("hls_http")
@@ -397,28 +610,50 @@ class Runtime:
                     generation = self.source_generation
                     process = self.processes.get(name)
                     result = await self.inspect(name, api, port)
-                    if generation != self.source_generation or process is not self.processes.get(name):
+                    if generation != self.source_generation or process is not self.processes.get(
+                        name
+                    ):
                         continue
                     self.snapshot[name] = result
-                    state = (result["process"], result["available"],
-                             tuple((p["name"], p["ready"], tuple(p["codecs"])) for p in result["paths"]),
-                             tuple(s["id"] for s in result["sessions"]))
+                    state = (
+                        result["process"],
+                        result["available"],
+                        tuple((p["name"], p["ready"], tuple(p["codecs"])) for p in result["paths"]),
+                        tuple(s["id"] for s in result["sessions"]),
+                    )
                     if state != self.last_states.get(name):
                         self.last_states[name] = state
-                        self.events.emit(name, "status_changed", "Process, stream or session state changed", **result)
+                        self.events.emit(
+                            name,
+                            "status_changed",
+                            "Process, stream or session state changed",
+                            **result,
+                        )
                     if result.get("bytes") is not None:
-                        self.events.emit(name, "traffic_sample", "Server traffic counters sampled",
-                                         bytes=result["bytes"], rx_bps=result["rx_bps"], tx_bps=result["tx_bps"],
-                                         hls_http_bps=result["hls_http_bps"])
+                        self.events.emit(
+                            name,
+                            "traffic_sample",
+                            "Server traffic counters sampled",
+                            bytes=result["bytes"],
+                            rx_bps=result["rx_bps"],
+                            tx_bps=result["tx_bps"],
+                            hls_http_bps=result["hls_http_bps"],
+                        )
                 async with self.lock:
-                    ready = any(p["name"] == "live" and p["ready"] for p in self.snapshot["origin"]["paths"])
+                    ready = any(
+                        p["name"] == "live" and p["ready"] for p in self.snapshot["origin"]["paths"]
+                    )
                     if ready and self.protocol == "hls":
                         await self._bridge()
                     elif self.alive("hls-bridge"):
                         await self.stop("hls-bridge")
                 if self.protocol == "whep":
-                    self.events.emit("media-relay", "traffic_sample", "Forwarded and discarded traffic totals",
-                                     **self.media_relay.status())
+                    self.events.emit(
+                        "media-relay",
+                        "traffic_sample",
+                        "Forwarded and discarded traffic totals",
+                        **self.media_relay.status(),
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

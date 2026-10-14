@@ -1,4 +1,5 @@
 """Pass, discard, or impair encrypted WebRTC traffic without changing signaling."""
+
 import asyncio
 from collections import OrderedDict
 import random
@@ -20,13 +21,21 @@ class _Upstream(asyncio.DatagramProtocol):
     def datagram_received(self, data, _):
         self.last_seen = time.monotonic()
         if self.relay.udp:
-            self.relay.send_udp(data, lambda packet: self.relay.udp.sendto(packet, self.address),
-                                self, "downstream")
+            self.relay.send_udp(
+                data, lambda packet: self.relay.udp.sendto(packet, self.address), self, "downstream"
+            )
 
 
 class MediaRelay(asyncio.DatagramProtocol):
-    def __init__(self, events, host="0.0.0.0", udp_port=8189, tcp_port=8186,
-                 upstream_udp_port=18189, upstream_tcp_port=18186):
+    def __init__(
+        self,
+        events,
+        host="0.0.0.0",
+        udp_port=8189,
+        tcp_port=8186,
+        upstream_udp_port=18189,
+        upstream_tcp_port=18186,
+    ):
         self.events, self.host = events, host
         self.udp_port, self.tcp_port = udp_port, tcp_port
         self.upstream_udp_port, self.upstream_tcp_port = upstream_udp_port, upstream_tcp_port
@@ -41,16 +50,24 @@ class MediaRelay(asyncio.DatagramProtocol):
         self.flows = {}
         self.scheduled = {}
         self.queued_bytes = 0
-        self.counters = {f"{kind}_{action}_{unit}": 0 for kind in ("udp", "tcp")
-                         for action in ("forwarded", "dropped") for unit in ("packets", "bytes")}
-        self.classes = {kind: {action: 0 for action in ("forwarded", "dropped")}
-                        for kind in ("audio", "video", "rtp", "rtcp", "stun", "dtls", "other")}
+        self.counters = {
+            f"{kind}_{action}_{unit}": 0
+            for kind in ("udp", "tcp")
+            for action in ("forwarded", "dropped")
+            for unit in ("packets", "bytes")
+        }
+        self.classes = {
+            kind: {action: 0 for action in ("forwarded", "dropped")}
+            for kind in ("audio", "video", "rtp", "rtcp", "stun", "dtls", "other")
+        }
 
     async def start(self):
         if self.udp:
             return
         loop = asyncio.get_running_loop()
-        self.udp, _ = await loop.create_datagram_endpoint(lambda: self, local_addr=(self.host, self.udp_port))
+        self.udp, _ = await loop.create_datagram_endpoint(
+            lambda: self, local_addr=(self.host, self.udp_port)
+        )
         self.udp_port = self.udp.get_extra_info("sockname")[1]
         try:
             self.tcp = await asyncio.start_server(self._accept, self.host, self.tcp_port)
@@ -60,8 +77,13 @@ class MediaRelay(asyncio.DatagramProtocol):
             self.udp = None
             raise
         self.reaper = asyncio.create_task(self._reap())
-        self.events.emit("media-relay", "relay_started", "WebRTC UDP and TCP forwarding enabled",
-                         udp_port=self.udp_port, tcp_port=self.tcp_port)
+        self.events.emit(
+            "media-relay",
+            "relay_started",
+            "WebRTC UDP and TCP forwarding enabled",
+            udp_port=self.udp_port,
+            tcp_port=self.tcp_port,
+        )
 
     def register_answer(self, body, previous=None):
         ufrags, payloads = answer_metadata(body, previous)
@@ -88,9 +110,14 @@ class MediaRelay(asyncio.DatagramProtocol):
         self.impairment = dict(impairment) if impairment else None
         self.blocked = bool(impairment and impairment["mode"] == "all")
         self.random.seed((impairment or {}).get("seed", 42))
-        self.events.emit("media-relay", "media_blocked" if impairment else "media_restored",
-                         "Media fault applied; signaling stays available" if impairment else "Media forwarding restored",
-                         **self.status())
+        self.events.emit(
+            "media-relay",
+            "media_blocked" if impairment else "media_restored",
+            "Media fault applied; signaling stays available"
+            if impairment
+            else "Media forwarding restored",
+            **self.status(),
+        )
 
     def set_blocked(self, blocked):
         if self.blocked == blocked and (blocked or self.impairment is None):
@@ -132,8 +159,11 @@ class MediaRelay(asyncio.DatagramProtocol):
         if self.random.random() * 100 < config.get("loss_pct", 0):
             flow["burst"] = max(0, config.get("burst_packets", 1) - 1)
             return kind, True, 0
-        milliseconds = max(0, config.get("latency_ms", 0) + self.random.uniform(
-            -config.get("jitter_ms", 0), config.get("jitter_ms", 0)))
+        milliseconds = max(
+            0,
+            config.get("latency_ms", 0)
+            + self.random.uniform(-config.get("jitter_ms", 0), config.get("jitter_ms", 0)),
+        )
         if transport == "udp" and self.random.random() * 100 < config.get("reorder_pct", 0):
             milliseconds += max(20, config.get("jitter_ms", 0))
         now = time.monotonic()
@@ -156,7 +186,9 @@ class MediaRelay(asyncio.DatagramProtocol):
 
     def send_udp(self, data, send, context, direction):
         kind, dropped, delay = self._decision("udp", data, context, direction)
-        if dropped or (delay and (len(self.scheduled) >= 4096 or self.queued_bytes + len(data) > 8_000_000)):
+        if dropped or (
+            delay and (len(self.scheduled) >= 4096 or self.queued_bytes + len(data) > 8_000_000)
+        ):
             self._count("udp", data, kind, True)
             return
         if not delay:
@@ -173,6 +205,7 @@ class MediaRelay(asyncio.DatagramProtocol):
             if generation == self.generation and self.udp:
                 self._count("udp", data, kind, False)
                 send(data)
+
         handle = asyncio.get_running_loop().call_later(delay, deliver)
         self.scheduled[handle] = (data, kind)
 
@@ -190,7 +223,8 @@ class MediaRelay(asyncio.DatagramProtocol):
         transport = None
         try:
             transport, protocol = await asyncio.get_running_loop().create_datagram_endpoint(
-                lambda: _Upstream(self, address), remote_addr=("127.0.0.1", self.upstream_udp_port))
+                lambda: _Upstream(self, address), remote_addr=("127.0.0.1", self.upstream_udp_port)
+            )
             if not self.udp:
                 transport.close()
                 return
@@ -252,15 +286,20 @@ class MediaRelay(asyncio.DatagramProtocol):
         context = _Upstream(self, None)
         try:
             remote, upstream = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", self.upstream_tcp_port), 3)
+                asyncio.open_connection("127.0.0.1", self.upstream_tcp_port), 3
+            )
             self.writers.add(upstream)
-            pumps = [asyncio.create_task(self._pump(reader, upstream, context, "upstream")),
-                     asyncio.create_task(self._pump(remote, writer, context, "downstream"))]
+            pumps = [
+                asyncio.create_task(self._pump(reader, upstream, context, "upstream")),
+                asyncio.create_task(self._pump(remote, writer, context, "downstream")),
+            ]
             done, _ = await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
         except (OSError, asyncio.TimeoutError) as exc:
-            self.events.emit("media-relay", "tcp_connection_ended", type(exc).__name__, level="INFO")
+            self.events.emit(
+                "media-relay", "tcp_connection_ended", type(exc).__name__, level="INFO"
+            )
         finally:
             self._forget_flow(context)
             for task in pumps:
@@ -276,10 +315,17 @@ class MediaRelay(asyncio.DatagramProtocol):
                         pass
 
     def status(self):
-        return dict(running=self.udp is not None and self.tcp is not None,
-                    blocked=self.blocked, impairment=dict(self.impairment) if self.impairment else None, udp_clients=len(self.clients),
-                    tcp_clients=len(self.tasks), queued_packets=len(self.scheduled), queued_bytes=self.queued_bytes,
-                    classified_packets={kind: dict(counts) for kind, counts in self.classes.items()}, **self.counters)
+        return dict(
+            running=self.udp is not None and self.tcp is not None,
+            blocked=self.blocked,
+            impairment=dict(self.impairment) if self.impairment else None,
+            udp_clients=len(self.clients),
+            tcp_clients=len(self.tasks),
+            queued_packets=len(self.scheduled),
+            queued_bytes=self.queued_bytes,
+            classified_packets={kind: dict(counts) for kind, counts in self.classes.items()},
+            **self.counters,
+        )
 
     async def close(self):
         server, self.tcp = self.tcp, None
@@ -289,7 +335,9 @@ class MediaRelay(asyncio.DatagramProtocol):
         if self.udp:
             self.udp.close()
             self.udp = None
-        jobs = list(self.tasks) + list(self.pending.values()) + ([self.reaper] if self.reaper else [])
+        jobs = (
+            list(self.tasks) + list(self.pending.values()) + ([self.reaper] if self.reaper else [])
+        )
         for writer in list(self.writers):
             writer.close()
         for task in jobs:
@@ -305,4 +353,6 @@ class MediaRelay(asyncio.DatagramProtocol):
         self.impairment = None
         if server:
             await server.wait_closed()
-            self.events.emit("media-relay", "relay_stopped", "WebRTC relay stopped", **self.status())
+            self.events.emit(
+                "media-relay", "relay_stopped", "WebRTC relay stopped", **self.status()
+            )

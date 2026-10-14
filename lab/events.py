@@ -9,7 +9,7 @@ import uuid
 
 def redact_message(message):
     # MediaMTX / FFmpeg may print input URLs. Never persist URL credentials or queries.
-    message = re.sub(r'(https?|rtsp)://[^\s\]\)"\']+', r'\1://[redacted-url]', str(message))
+    message = re.sub(r'(https?|rtsp)://[^\s\]\)"\']+', r"\1://[redacted-url]", str(message))
     return message[:2000]
 
 
@@ -37,9 +37,16 @@ class Events:
 
     def emit(self, component, event, message, level="INFO", **fields):
         self.sequence += 1
-        record = dict(timestamp=datetime.now(timezone.utc).isoformat(), run_id=self.run_id,
-                      sequence=self.sequence, component=component, level=level,
-                      event=event, message=redact_message(message), **fields)
+        record = dict(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            run_id=self.run_id,
+            sequence=self.sequence,
+            component=component,
+            level=level,
+            event=event,
+            message=redact_message(message),
+            **fields,
+        )
         line = json.dumps(record, ensure_ascii=False) + "\n"
         if self.file.tell() + len(line.encode()) > 5_000_000:
             self._rotate()

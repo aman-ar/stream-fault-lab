@@ -18,11 +18,18 @@ from lab.gateway import Faults, Gateway, gateway_app
 
 class FakeRuntime:
     def __init__(self):
-        self.media_relay = SimpleNamespace(set_blocked=lambda value: setattr(self.media_relay, "blocked", value), blocked=False, udp_port=8189, tcp_port=8186)
+        self.media_relay = SimpleNamespace(
+            set_blocked=lambda value: setattr(self.media_relay, "blocked", value),
+            blocked=False,
+            udp_port=8189,
+            tcp_port=8186,
+        )
         self.edge = True
         self.fail_restart = False
         self.protocol = "whep"
-        self.ice_blackhole = SimpleNamespace(start=AsyncMock(), close=AsyncMock(), udp_port=18289, tcp_port=18286)
+        self.ice_blackhole = SimpleNamespace(
+            start=AsyncMock(), close=AsyncMock(), udp_port=18289, tcp_port=18286
+        )
 
     def alive(self, name):
         return self.edge
@@ -50,16 +57,25 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
             self.seen.append((request.method, request.path, request.query_string, body))
             if request.method == "POST":
                 session_id = uuid.uuid4().hex
-                return web.Response(status=201, text=self.answer, headers={
-                    "Content-Type": "application/sdp", "Location": f"/live/whep/{session_id}?secret=server-secret",
-                    "ETag": '"etag-value"'})
+                return web.Response(
+                    status=201,
+                    text=self.answer,
+                    headers={
+                        "Content-Type": "application/sdp",
+                        "Location": f"/live/whep/{session_id}?secret=server-secret",
+                        "ETag": '"etag-value"',
+                    },
+                )
             if request.method == "PATCH":
                 return web.Response(status=204, headers={"ETag": '"etag-value"'})
             if request.method == "DELETE":
                 return web.Response(status=200)
             if request.path.endswith(".m3u8"):
                 base = str(self.upstream.make_url("/"))[:-1]
-                return web.Response(text=f'#EXTM3U\n#EXT-X-MAP:URI="/live-hls/init.mp4"\n{base}/live-hls/seg.mp4\n', content_type="application/vnd.apple.mpegurl")
+                return web.Response(
+                    text=f'#EXTM3U\n#EXT-X-MAP:URI="/live-hls/init.mp4"\n{base}/live-hls/seg.mp4\n',
+                    content_type="application/vnd.apple.mpegurl",
+                )
             return web.Response(body=b"media-data", content_type="video/mp4")
 
         app = web.Application()
@@ -69,7 +85,9 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
         self.session = ClientSession()
         upstream_base = str(self.upstream.make_url("/"))[:-1]
         self.gateway = Gateway(self.session, self.faults, self.events, upstream_base, upstream_base)
-        self.client = TestClient(TestServer(gateway_app(self.gateway), handler_cancellation=True, shutdown_timeout=0.1))
+        self.client = TestClient(
+            TestServer(gateway_app(self.gateway), handler_cancellation=True, shutdown_timeout=0.1)
+        )
         await self.client.start_server()
 
     async def asyncTearDown(self):
@@ -81,7 +99,9 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
         self.directory.cleanup()
 
     async def post(self):
-        response = await self.client.post("/live/whep", data="offer-secret", headers={"Content-Type": "application/sdp"})
+        response = await self.client.post(
+            "/live/whep", data="offer-secret", headers={"Content-Type": "application/sdp"}
+        )
         self.assertEqual(response.status, 201)
         self.assertEqual(await response.text(), self.answer)
         return response.headers["Location"]
@@ -91,7 +111,9 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(first, second)
         self.assertTrue(first.startswith("/live/whep/session/"))
         self.assertNotIn("server-secret", first)
-        patch = await self.client.patch(first, data="patch-secret", headers={"If-Match": '"etag-value"'})
+        patch = await self.client.patch(
+            first, data="patch-secret", headers={"If-Match": '"etag-value"'}
+        )
         self.assertEqual(patch.status, 204)
         self.assertEqual(patch.headers["ETag"], '"etag-value"')
         self.assertEqual((await self.client.delete(second)).status, 200)
@@ -113,7 +135,11 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers["Retry-After"], "5")
         self.assertEqual(len(self.seen), 1)
         self.assertEqual((await self.client.delete(location)).status, 200)
-        finished = [e for e in self.events.records if e["event"] == "request_finished" and e["response_status"] == 503][0]
+        finished = [
+            e
+            for e in self.events.records
+            if e["event"] == "request_finished" and e["response_status"] == 503
+        ][0]
         self.assertIsNone(finished["upstream_status"])
         self.assertEqual(finished["request_bytes"], 5)
 
@@ -130,7 +156,9 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_playlist_urls_and_queries_stay_on_gateway(self):
         self.runtime.protocol = "hls"
         response = await self.client.get("/live/index.m3u8?_HLS_msn=3&token=client-secret")
-        self.assertEqual(await response.text(), '#EXTM3U\n#EXT-X-MAP:URI="/live/init.mp4"\n/live/seg.mp4\n')
+        self.assertEqual(
+            await response.text(), '#EXTM3U\n#EXT-X-MAP:URI="/live/init.mp4"\n/live/seg.mp4\n'
+        )
         self.assertEqual(self.seen[0][1], "/live-hls/index.m3u8")
         self.assertEqual(self.seen[0][2], "_HLS_msn=3&token=client-secret")
         self.assertNotIn("client-secret", json.dumps(list(self.events.records)))
@@ -189,13 +217,20 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_untrusted_location_is_rejected(self):
         with self.assertRaises(ValueError):
-            self.gateway.rewrite_location("http://other.example/live/whep/session", self.gateway.whep_upstream + "/live/whep")
+            self.gateway.rewrite_location(
+                "http://other.example/live/whep/session", self.gateway.whep_upstream + "/live/whep"
+            )
 
     async def test_hls_session_redirect_stays_on_gateway(self):
-        location = self.gateway.rewrite_hls_location("/live-hls/index.m3u8?cookieCheck=1", self.gateway.hls_upstream + "/live-hls/index.m3u8")
+        location = self.gateway.rewrite_hls_location(
+            "/live-hls/index.m3u8?cookieCheck=1", self.gateway.hls_upstream + "/live-hls/index.m3u8"
+        )
         self.assertEqual(location, "/live/index.m3u8?cookieCheck=1")
         with self.assertRaises(ValueError):
-            self.gateway.rewrite_hls_location("https://other.test/live-hls/index.m3u8", self.gateway.hls_upstream + "/live-hls/index.m3u8")
+            self.gateway.rewrite_hls_location(
+                "https://other.test/live-hls/index.m3u8",
+                self.gateway.hls_upstream + "/live-hls/index.m3u8",
+            )
 
     async def test_unselected_output_never_reaches_edge(self):
         response = await self.client.get("/live/index.m3u8")
@@ -215,9 +250,11 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.faults.status()["id"], fault_id)
 
     async def test_ice_fault_keeps_201_and_rewrites_udp_and_tcp_candidates(self):
-        self.answer = ('v=0\r\na=ice-pwd:private-ice-password\r\n'
-                       'a=candidate:1 1 UDP 123 10.0.2.2 8189 typ host\r\n'
-                       'a=candidate:2 1 TCP 122 10.0.2.2 8186 typ host tcptype passive\r\n')
+        self.answer = (
+            "v=0\r\na=ice-pwd:private-ice-password\r\n"
+            "a=candidate:1 1 UDP 123 10.0.2.2 8189 typ host\r\n"
+            "a=candidate:2 1 TCP 122 10.0.2.2 8186 typ host tcptype passive\r\n"
+        )
         await self.faults.apply("ice-unreachable", "whep-post", 5)
         response = await self.client.post("/live/whep", data="offer")
         self.assertEqual(response.status, 201)
@@ -225,7 +262,7 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("10.0.2.2 18289 typ host", changed)
         self.assertIn("10.0.2.2 18286 typ host tcptype passive", changed)
         self.assertIn("Location", response.headers)
-        self.assertEqual((await self.client.delete(response.headers['Location'])).status, 200)
+        self.assertEqual((await self.client.delete(response.headers["Location"])).status, 200)
         self.runtime.ice_blackhole.start.assert_awaited_once()
         self.assertNotIn("private-ice-password", json.dumps(list(self.events.records)))
         await self.faults.restore()
@@ -233,13 +270,13 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await response.text(), self.answer)
 
     async def test_dtls_fault_keeps_201_and_only_changes_fingerprints(self):
-        fingerprint = ':'.join(['AB'] * 32)
-        self.answer = f'v=0\r\na=fingerprint:sha-256 {fingerprint}\r\na=candidate:1 1 UDP 123 10.0.2.2 8189 typ host\r\na=fingerprint:sha-256 {fingerprint}\r\n'
+        fingerprint = ":".join(["AB"] * 32)
+        self.answer = f"v=0\r\na=fingerprint:sha-256 {fingerprint}\r\na=candidate:1 1 UDP 123 10.0.2.2 8189 typ host\r\na=fingerprint:sha-256 {fingerprint}\r\n"
         await self.faults.apply("dtls-fingerprint", "whep-post", 5)
         response = await self.client.post("/live/whep", data="offer")
         self.assertEqual(response.status, 201)
         changed = await response.text()
-        self.assertEqual(changed, self.answer.replace('sha-256 AB:', 'sha-256 AA:'))
+        self.assertEqual(changed, self.answer.replace("sha-256 AB:", "sha-256 AA:"))
         self.assertIn("Location", response.headers)
         self.assertEqual(len(self.seen), 1)
         self.assertNotIn(fingerprint, json.dumps(list(self.events.records)))
@@ -249,7 +286,7 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_transport_faults_are_rejected_for_hls(self):
         self.runtime.protocol = "hls"
-        for preset in ('ice-unreachable', 'dtls-fingerprint'):
+        for preset in ("ice-unreachable", "dtls-fingerprint"):
             with self.assertRaises(ValueError):
                 await self.faults.apply(preset, "whep-post", 5)
         self.runtime.ice_blackhole.start.assert_not_awaited()
@@ -273,8 +310,10 @@ class GatewayContractTests(unittest.IsolatedAsyncioTestCase):
             await self.faults.apply("media-outage", "playback", 5)
 
     async def test_healthy_candidates_use_relay_public_ports(self):
-        self.answer = ('v=0\r\na=candidate:1 1 UDP 123 10.0.2.2 18189 typ host\r\n'
-                       'a=candidate:2 1 TCP 122 10.0.2.2 18186 typ host tcptype passive\r\n')
+        self.answer = (
+            "v=0\r\na=candidate:1 1 UDP 123 10.0.2.2 18189 typ host\r\n"
+            "a=candidate:2 1 TCP 122 10.0.2.2 18186 typ host tcptype passive\r\n"
+        )
         response = await self.client.post("/live/whep", data="offer")
         self.assertEqual(response.status, 201)
         answer = await response.text()
@@ -287,7 +326,11 @@ class TraceTests(unittest.TestCase):
     def test_process_url_credentials_are_redacted(self):
         with tempfile.TemporaryDirectory() as directory:
             events = Events(Path(directory))
-            events.emit("source", "server_log", "Cannot read https://user:password@example.test/live.m3u8?token=secret")
+            events.emit(
+                "source",
+                "server_log",
+                "Cannot read https://user:password@example.test/live.m3u8?token=secret",
+            )
             events.close()
             trace = next(Path(directory).glob("*.jsonl")).read_text()
             for value in ("password", "secret", "example.test"):
@@ -300,7 +343,9 @@ class LocalControlTests(unittest.IsolatedAsyncioTestCase):
         self.events = Events(Path(self.directory.name))
         self.runtime = FakeRuntime()
         self.faults = Faults(self.runtime, self.events)
-        self.client = TestClient(TestServer(admin_app(self.runtime, self.faults, self.events, "127.0.0.1")))
+        self.client = TestClient(
+            TestServer(admin_app(self.runtime, self.faults, self.events, "127.0.0.1"))
+        )
         await self.client.start_server()
 
     async def asyncTearDown(self):
@@ -310,7 +355,9 @@ class LocalControlTests(unittest.IsolatedAsyncioTestCase):
         self.directory.cleanup()
 
     async def test_control_rejects_foreign_origin_and_non_json(self):
-        foreign = await self.client.post("/api/restore", json={}, headers={"Origin": "https://other.example"})
+        foreign = await self.client.post(
+            "/api/restore", json={}, headers={"Origin": "https://other.example"}
+        )
         self.assertEqual(foreign.status, 403)
         form = await self.client.post("/api/restore", data={"preset": "edge-down"})
         self.assertEqual(form.status, 415)
@@ -321,7 +368,9 @@ class LocalControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 403)
 
     async def test_malformed_json_does_not_apply_fault(self):
-        response = await self.client.post("/api/fault", data='{"preset":', headers={"Content-Type": "application/json"})
+        response = await self.client.post(
+            "/api/fault", data='{"preset":', headers={"Content-Type": "application/json"}
+        )
         self.assertEqual(response.status, 400)
         self.assertIsNone(self.faults.status())
 

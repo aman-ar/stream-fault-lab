@@ -2,6 +2,7 @@
 
 Does not replace an active OBS/external publisher. Leaves the test pattern running.
 """
+
 import argparse
 import asyncio
 import time
@@ -12,6 +13,7 @@ from aiohttp import ClientSession, ClientTimeout
 
 async def main(base):
     async with ClientSession(timeout=ClientTimeout(total=20)) as client:
+
         async def command(path, data):
             async with client.post(base + path, json=data) as response:
                 result = await response.json()
@@ -34,14 +36,19 @@ async def main(base):
             raise AssertionError("Timed out waiting for lab state")
 
         def ready(result):
-            return all(p["ready"] for p in result["components"]["edge"]["paths"]) and len(result["components"]["edge"]["paths"]) == 1
+            return (
+                all(p["ready"] for p in result["components"]["edge"]["paths"])
+                and len(result["components"]["edge"]["paths"]) == 1
+            )
 
         original_protocol = (await status())["protocol"]
         await command("/api/restore", {})
         try:
             await command("/api/source", {"kind": "demo"})
             await command("/api/protocol", {"protocol": "hls"})
-            current = await wait_for(lambda state: ready(state) and state["components"]["origin"]["rx_bps"] is not None)
+            current = await wait_for(
+                lambda state: ready(state) and state["components"]["origin"]["rx_bps"] is not None
+            )
             assert current["components"]["origin"]["rx_bps"] is not None
             print("PASS: generated source, origin, edge, and HLS audio bridge ready")
             hls = current["urls"]["hls"]
@@ -56,12 +63,16 @@ async def main(base):
                 assert response.status == 200
                 master = await response.text()
                 master_base = str(response.url)
-            variant = next(line for line in master.splitlines() if line and not line.startswith("#"))
+            variant = next(
+                line for line in master.splitlines() if line and not line.startswith("#")
+            )
             async with client.get(urljoin(master_base, variant)) as response:
                 assert response.status == 200
                 playlist = await response.text()
                 playlist_base = str(response.url)
-            segment = next(line for line in playlist.splitlines() if line and not line.startswith("#"))
+            segment = next(
+                line for line in playlist.splitlines() if line and not line.startswith("#")
+            )
             segment_url = urljoin(playlist_base, segment)
             async with client.get(segment_url) as response:
                 assert response.status == 200
@@ -79,7 +90,9 @@ async def main(base):
             async with client.get(hls) as response:
                 assert response.status == 200
             print("PASS: segment 502 leaves playlist requests healthy")
-            await command("/api/fault", dict(preset="delay", scope="hls-playlist", duration=10, delay_ms=300))
+            await command(
+                "/api/fault", dict(preset="delay", scope="hls-playlist", duration=10, delay_ms=300)
+            )
             started = time.monotonic()
             async with client.get(hls) as response:
                 assert response.status == 200

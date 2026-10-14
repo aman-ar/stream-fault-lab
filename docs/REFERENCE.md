@@ -4,37 +4,6 @@ A local lab for testing HTTP delivery, WebRTC media stalls, impaired delivery, a
 
 > New here? Read the [README](../README.md) for a quick overview.
 
-## At a glance
-
-```mermaid
-flowchart LR
-    SRC["🎥 <b>Source</b><br/>OBS · HLS URL · test pattern"]
-    ORI["🖥️ <b>Origin</b><br/>holds the live stream"]
-    EDG["📡 <b>Edge</b><br/>serves WHEP or HLS"]
-    CDN{{"⚡ <b>Mock CDN / network</b><br/>Gateway (HTTP)<br/>Media relay (UDP/TCP)"}}
-    PLY["📱 <b>Your player</b>"]
-    CTL["🎛️ <b>Fault controls</b><br/>web UI"]
-
-    SRC --> ORI --> EDG --> CDN --> PLY
-    CTL -. inject / restore .-> CDN
-
-    classDef healthy fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-    classDef fault fill:#fff3e0,stroke:#ef6c00,stroke-width:3px,color:#bf360c
-    classDef player fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-    classDef ctl fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
-    class SRC,ORI,EDG healthy
-    class CDN fault
-    class PLY player
-    class CTL ctl
-```
-
-| Step | Command |
-| --- | --- |
-| 1. Install prerequisites (once) | `brew install python ffmpeg` |
-| 2. Start the lab | `./start.sh` |
-| 3. Open the controller | http://localhost:9091 |
-| 4. Play | WHEP: `http://127.0.0.1:8080/live/whep` · HLS: `http://127.0.0.1:8080/live/index.m3u8` |
-
 ## Start on your Mac
 
 You need Python 3.11+ and FFmpeg. If needed, install them once with Homebrew:
@@ -158,30 +127,7 @@ Quality queues are bounded to 4096 UDP packets / 8 MB and two seconds of delay. 
 
 **UDP blocked** acts on the public media relay. Fresh attempts may select direct ICE TCP. TURN over TCP still has a UDP TURN-to-edge hop, so that hop is blocked too. Validate TURN transports separately; this control does not reproduce an entire VPN/firewall policy.
 
-### TURN and VPN checks
-
-Optional native TURN support:
-
-```sh
-brew install coturn
-```
-
-1. Restore healthy. Under **TURN / VPN checks**, choose **Local coturn** and enter this Mac's LAN IPv4 address. Keep HTTP's emulator alias if needed; the media host must be reachable by the TURN service. Configure TURN. Existing WHEP sessions close because the edge restarts.
-2. **Copy ICE config** and configure these servers in your app before it creates its offer. The gateway also advertises repeated `Link: rel="ice-server"` headers on OPTIONS and POST, exposing Link through CORS. Your WHEP client must support consuming them; the lab does not configure Android automatically.
-3. In the reference player, select **Require TURN over UDP** or **Require TURN over TCP**, then Play. Check **TURN route** and transport in the selected-pair readout, together with advancing frames.
-4. Repeat on your device with VPN off/on. Save client stats and logs, not just successful signaling. For negative cases, use external configuration with an unreachable server or rejected credentials and verify normal policy behavior.
-
-The local coturn child listens on the supplied Mac IP, UDP/TCP 3478, with UDP relay ports 49160–49200. It is owned by the lab and stops with it; no login service is installed. Credentials are generated for each local configuration. Config files are private and gitignored; status, traces and browser storage omit credentials. Local development loopback use permits loopback peers; use the LAN IP for device tests. Disabling TURN or stopping the lab removes its coturn credential file.
-
-The media proxy can cause Chrome to label the selected local candidate **prflx** rather than **relay**. The readout separately identifies a TURN route from the selected candidate's TURN URL/relay transport; requiring relay-only playback avoids a successful direct path being mistaken for TURN. Trace samples contain the candidate types and transport, never raw candidate addresses or credentials.
-
-External **STUN / TURN / TURN-TLS** accepts RTCConfiguration `iceServers` JSON. TURN/TLS needs a reachable `turns:` service with a trusted certificate. A LAN lab may itself be inaccessible through a VPN or mobile network. Local TURN does not create public routing or a trusted TLS endpoint. TURN configuration and HLS profile are per-run; the playback protocol is saved across restarts.
-
-### LL-HLS profile
-
-Select HLS, then **LL-HLS · 200 ms parts**. The edge restarts with MediaMTX's lowLatency profile, preserving the source. The gateway preserves `_HLS_msn`, `_HLS_part`, and `_HLS_skip` query parameters and rewrites part, map, and preload-hint URIs through the fault path. Actual part durations depend on track timing; segments depend on encoder keyframes. Test playlist delay/timeouts for blocked reload and HLS media faults for partial segments as well as initialization/full segments.
-
-Stale-playlist mode holds the first successful snapshot per path across LL-HLS reload query values. Truncated-download mode sends the retained prefix with the original Content-Length, then closes the connection. These are fault fixtures, not a full CDN cache implementation. Local HTTP LL-HLS is for Android/browser checks; Apple's LL-HLS requirements include HTTPS. Single-rendition output cannot validate ABR fallback between variants.
+TURN/VPN checks and the LL-HLS profile are covered in [ADVANCED.md](ADVANCED.md).
 
 ### Test a mid-stream outage
 
@@ -217,27 +163,14 @@ Logs use collector UTC timestamps and a per-run sequence. Trace bodies omit SDP,
 
 ## Verification
 
-Gateway contract tests use real local HTTP servers and fake media endpoints. No OBS is needed:
-
-```sh
-./start.sh                 # first-time dependency installation, then Ctrl+C
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-With the lab running, this smoke check starts the generated source and exercises real HLS delivery and all five faults. It refuses to replace an active external publisher. It temporarily selects HLS, restores the original playback protocol afterward, leaves the test pattern running, and clears the fault:
-
-```sh
-.venv/bin/python scripts/smoke.py
-```
-
-For a quick decode check, select HLS output while the generated source is running:
+Run the tests and the smoke check as described in [TESTING.md](TESTING.md). For a quick decode check, select HLS output while the generated source is running:
 
 ```sh
 ffmpeg -hide_banner -loglevel error \
   -i http://127.0.0.1:8080/live/index.m3u8 -t 3 -f null -
 ```
 
-For your player: start healthy playback, apply a fault, record failure/retry events, restore, and verify new changing frames. For WHEP, inspect fresh POSTs, PATCH/DELETE requests, and server session inventory. Closing the old PeerConnection alone does not prove DELETE was sent. Measure your client's retry timing and rendered-frame recovery separately from server readiness.
+For your player: start healthy playback, apply a fault, record failure/retry events, restore, and verify new changing frames. For WHEP, inspect fresh POSTs, PATCH/DELETE requests, and server session inventory. Closing the old PeerConnection alone does not prove DELETE was sent.
 
 ## Files and ports
 

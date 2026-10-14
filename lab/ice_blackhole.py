@@ -23,7 +23,9 @@ class IceBlackhole(asyncio.DatagramProtocol):
         self.counts["udp_packets"] += 1
         self.counts["udp_bytes"] += len(data)
         if self.counts["udp_packets"] == 1:
-            self.events.emit("ice-blackhole", "traffic_received", "UDP ICE traffic reached the discard endpoint")
+            self.events.emit(
+                "ice-blackhole", "traffic_received", "UDP ICE traffic reached the discard endpoint"
+            )
 
     def connection_lost(self, error):
         if self.udp_closed and not self.udp_closed.done():
@@ -38,7 +40,11 @@ class IceBlackhole(asyncio.DatagramProtocol):
         self.writers.add(writer)
         self.counts["tcp_connections"] += 1
         if self.counts["tcp_connections"] == 1:
-            self.events.emit("ice-blackhole", "traffic_received", "TCP ICE connection reached the discard endpoint")
+            self.events.emit(
+                "ice-blackhole",
+                "traffic_received",
+                "TCP ICE connection reached the discard endpoint",
+            )
         try:
             while data := await asyncio.wait_for(reader.read(65536), 60):
                 self.counts["tcp_bytes"] += len(data)
@@ -60,15 +66,24 @@ class IceBlackhole(asyncio.DatagramProtocol):
         try:
             loop = asyncio.get_running_loop()
             self.udp_closed = loop.create_future()
-            self.udp, _ = await loop.create_datagram_endpoint(lambda: self, local_addr=(self.host, self.udp_port))
+            self.udp, _ = await loop.create_datagram_endpoint(
+                lambda: self, local_addr=(self.host, self.udp_port)
+            )
             self.udp_port = self.udp.get_extra_info("sockname")[1]
             self.tcp = await asyncio.start_server(self._discard_tcp, self.host, self.tcp_port)
             self.tcp_port = self.tcp.sockets[0].getsockname()[1]
         except OSError as exc:
             await self.close()
-            raise RuntimeError("Cannot bind ICE discard ports. Stop the application using those ports and retry.") from exc
-        self.events.emit("ice-blackhole", "started", "UDP and TCP ICE discard endpoints ready",
-                         udp_port=self.udp_port, tcp_port=self.tcp_port)
+            raise RuntimeError(
+                "Cannot bind ICE discard ports. Stop the application using those ports and retry."
+            ) from exc
+        self.events.emit(
+            "ice-blackhole",
+            "started",
+            "UDP and TCP ICE discard endpoints ready",
+            udp_port=self.udp_port,
+            tcp_port=self.tcp_port,
+        )
 
     async def close(self):
         active = self.udp is not None or self.tcp is not None
@@ -89,4 +104,6 @@ class IceBlackhole(asyncio.DatagramProtocol):
         if server:
             await server.wait_closed()
         if active:
-            self.events.emit("ice-blackhole", "stopped", "ICE discard endpoints closed", **self.counts)
+            self.events.emit(
+                "ice-blackhole", "stopped", "ICE discard endpoints closed", **self.counts
+            )

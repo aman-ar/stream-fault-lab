@@ -1,4 +1,5 @@
 """Read public packet headers only. Never decrypt or retain media payloads."""
+
 import re
 
 
@@ -22,12 +23,12 @@ def stun_usernames(data):
     end = min(len(data), 20 + int.from_bytes(data[2:4], "big"))
     offset = 20
     while offset + 4 <= end:
-        tag = int.from_bytes(data[offset:offset + 2], "big")
-        size = int.from_bytes(data[offset + 2:offset + 4], "big")
+        tag = int.from_bytes(data[offset : offset + 2], "big")
+        size = int.from_bytes(data[offset + 2 : offset + 4], "big")
         if offset + 4 + size > end:
             break
         if tag == 6:  # STUN USERNAME: remote/local ICE fragments, not persisted.
-            return tuple(data[offset + 4:offset + 4 + size].decode(errors="replace").split(":"))
+            return tuple(data[offset + 4 : offset + 4 + size].decode(errors="replace").split(":"))
         offset += 4 + ((size + 3) // 4) * 4
     return ()
 
