@@ -215,10 +215,6 @@ Logs use collector UTC timestamps and a per-run sequence. Trace bodies omit SDP,
 
 **Export trace** downloads JSONL for the current app run. Files also live in `.runtime/traces/`; each rotates at approximately 5MB, with at most 20 retained files across runs. Restarting the app starts a new run. Traces are not committed to Git.
 
-## Player observations
-
-See [PLAYER_TEST_RESULTS.md](../PLAYER_TEST_RESULTS.md) for observed Android player errors and recovery results, with supporting server evidence. Pending scenarios are not marked as tested.
-
 ## Verification
 
 Gateway contract tests use real local HTTP servers and fake media endpoints. No OBS is needed:
@@ -265,7 +261,7 @@ Native Apple Silicon was exercised during development; the bootstrap also pins a
 
 ## Still requires representative infrastructure / devices
 
-Real Wi-Fi/mobile handover, NAT/address changes, VPN routing, trusted TURN/TLS, DNS/TLS failures, certificate rotation, multiple CDNs, token-refresh integration, multiple HLS variants/ABR, load, and long-running resource tests require appropriate device/network/source/server setups. HTTP status fixtures do not implement a real auth refresh service. This lab provides fault controls and reference evidence, not universal player certification. Use [PLAYER_ACCEPTANCE_CHECKLIST.md](../PLAYER_ACCEPTANCE_CHECKLIST.md) to track app/device runs and [PLAYER_RESILIENCE_PLAN.md](../PLAYER_RESILIENCE_PLAN.md) for standards and remaining areas. The Android DTLS recovery-policy issue remains noted in [PLAYER_TEST_RESULTS.md](../PLAYER_TEST_RESULTS.md); no Android source was changed.
+Real Wi-Fi/mobile handover, NAT/address changes, VPN routing, trusted TURN/TLS, DNS/TLS failures, certificate rotation, multiple CDNs, token-refresh integration, multiple HLS variants/ABR, load, and long-running resource tests require appropriate device/network/source/server setups. HTTP status fixtures do not implement a real auth refresh service. This lab provides fault controls and reference evidence, not universal player certification. Use [PLAYER_ACCEPTANCE_CHECKLIST.md](../PLAYER_ACCEPTANCE_CHECKLIST.md) to track app/device runs and [PLAYER_RESILIENCE_PLAN.md](../PLAYER_RESILIENCE_PLAN.md) for standards and remaining areas.
 
 ## Dependency references
 

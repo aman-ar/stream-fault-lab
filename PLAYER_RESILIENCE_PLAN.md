@@ -59,7 +59,7 @@ Suggested first three runs: 45-second media outage; repeated 5-second outages; e
 
 ## Priority update — VPN/TURN field case
 
-The user has observed unstable WHEP under a VPN and successful operation after configuring TURN credentials. Promote VPN/TURN connectivity to a priority reproduction check. Compare VPN-off direct playback, VPN-on without a usable relay, and VPN-on with TURN configured; prove relay usage with the selected candidate pair and measure frames, freeze time, and recovery. The report does not establish which TURN transport was used or whether UDP was blocked. Include unreachable/rejected TURN and mid-stream VPN toggling as subsequent checks. This requires a TURN service and a reachable edge endpoint; the current direct UDP/ICE-TCP lab is insufficient. See PLAYER_TEST_RESULTS.md for the user observation.
+The user has observed unstable WHEP under a VPN and successful operation after configuring TURN credentials. Promote VPN/TURN connectivity to a priority reproduction check. Compare VPN-off direct playback, VPN-on without a usable relay, and VPN-on with TURN configured; prove relay usage with the selected candidate pair and measure frames, freeze time, and recovery. The report does not establish which TURN transport was used or whether UDP was blocked. Include unreachable/rejected TURN and mid-stream VPN toggling as subsequent checks. This requires a TURN service and a reachable edge endpoint; the current direct UDP/ICE-TCP lab is insufficient.
 
 ## Implemented expansion — 2026-10-09
 

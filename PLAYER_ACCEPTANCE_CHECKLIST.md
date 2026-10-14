@@ -1,6 +1,6 @@
 # Player acceptance checklist
 
-This is the next-run checklist, not a pass report. Lab implementation checks are in VALIDATION.md; observed Android results are in PLAYER_TEST_RESULTS.md. Test the installed app build against its configured recovery policy. No Android source changes are included in this expansion.
+This is the next-run checklist, not a pass report. Lab implementation checks are in VALIDATION.md. Test the installed app build against its configured recovery policy. No Android source changes are included in this expansion.
 
 | ID | Setup / action | Evidence to capture | Result |
 | --- | --- | --- | --- |
